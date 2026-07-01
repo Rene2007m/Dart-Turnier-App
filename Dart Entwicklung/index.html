@@ -15,7 +15,7 @@
     <div class="container hidden" id="mainAppContainer">
         <header class="main-header">
             <h1>🎯 Darts-Turnier Manager <span class="version-tag" id="versionTag" style="cursor: pointer;"
-                    title="Was ist neu?">v4.2.0</span></h1>
+                    title="Was ist neu?">v5.0.0</span></h1>
             <p>Organisiert von Marcel & René</p>
         </header>
 
@@ -50,7 +50,8 @@
                     <button id="newTournamentBtn" class="btn btn-primary hidden"><span>➕ Neu</span></button>
                     <button id="deleteTournamentBtn" class="btn btn-danger hidden"><span>🗑️ Löschen</span></button>
                     <button id="userMgmtBtn" class="btn btn-outline hidden"><span>👥 User</span></button>
-                    <button id="settingsBtn" class="btn btn-outline" title="Einstellungen"><span>⚙️ Einstellungen</span></button>
+                    <button id="settingsBtn" class="btn btn-outline" title="Einstellungen"><span>⚙️
+                            Einstellungen</span></button>
                     <button id="adminLogoutBtn" class="btn btn-danger"><span>🚪 Logout</span></button>
                 </div>
             </section>
@@ -289,23 +290,30 @@
                 <div class="news-item system" style="margin-bottom: 20px;">
                     <div class="news-header">
                         <div class="news-title-group">
-                            <h4 class="news-title">Version 4.2.0 - Verbesserungs Update</h4>
+                            <h4 class="news-title">Version 5.0.0 - Funktions Update</h4>
                             <span class="news-date">10.06.2026</span>
                         </div>
                     </div>
                     <div class="news-content">
-
+                        <div class="feature-block">
+                            <h5> ⚙️ Neuigkeiten</h5>
+                            <ul>
+                                <li>Es können jetzt Einstellungen vorgenommen werden</li>
+                                <li>Ein Modernes Design wurde hinzugefügt</li>
+                            </ul>
+                        </div>
                         <div class="feature-block">
                             <h5> 🖌️ Verbesserungen</h5>
                             <ul>
-								<li>Der Admin Login Button wurde entfernt</li>
-								<li>Im Anmelde Fenster ist nur noch der Kürzel erforderlich</li>
+                                <li>Der Admin Login Button wurde entfernt</li>
+                                <li>Im Anmelde Fenster ist nur noch der Kürzel erforderlich</li>
                             </ul>
                         </div>
                         <div class="feature-block highlight">
                             <h5>🔧 Fehlerbehebungen</h5>
                             <ul>
-                                <li>Es ist nicht mehr möglich die Erste Frage nicht auszufüllen, wenn diese ein Pflichtfeld ist</li>
+                                <li>Es ist nicht mehr möglich die Erste Frage nicht auszufüllen, wenn diese ein
+                                    Pflichtfeld ist</li>
                             </ul>
                         </div>
                     </div>
@@ -618,7 +626,8 @@
                     <div class="settings-icon-wrapper">⚙️</div>
                     <div>
                         <h2 style="margin:0; font-size:1.3rem;">Einstellungen</h2>
-                        <p style="margin:0; font-size:0.75rem; color:var(--text-dim);">Die Einstellungen werden Lokal gespeichert</p>
+                        <p style="margin:0; font-size:0.75rem; color:var(--text-dim);">Die Einstellungen werden Lokal
+                            gespeichert</p>
                     </div>
                 </div>
                 <button id="closeSettingsModal" class="btn btn-outline small">✕</button>
@@ -637,18 +646,30 @@
                             <label class="style-option" id="styleClassicLabel">
                                 <input type="radio" name="bracketStyle" value="classic" id="styleClassic">
                                 <div class="style-preview classic-preview">
-                                    <div class="preview-match"><div class="preview-player"></div><div class="preview-player"></div></div>
+                                    <div class="preview-match">
+                                        <div class="preview-player"></div>
+                                        <div class="preview-player"></div>
+                                    </div>
                                     <div class="preview-line"></div>
-                                    <div class="preview-match"><div class="preview-player"></div><div class="preview-player"></div></div>
+                                    <div class="preview-match">
+                                        <div class="preview-player"></div>
+                                        <div class="preview-player"></div>
+                                    </div>
                                 </div>
                                 <span class="style-label">Klassisch</span>
                             </label>
                             <label class="style-option" id="styleModernLabel">
                                 <input type="radio" name="bracketStyle" value="modern" id="styleModern">
                                 <div class="style-preview modern-preview">
-                                    <div class="preview-match modern"><div class="preview-player modern"></div><div class="preview-player modern"></div></div>
+                                    <div class="preview-match modern">
+                                        <div class="preview-player modern"></div>
+                                        <div class="preview-player modern"></div>
+                                    </div>
                                     <div class="preview-line modern"></div>
-                                    <div class="preview-match modern"><div class="preview-player modern"></div><div class="preview-player modern"></div></div>
+                                    <div class="preview-match modern">
+                                        <div class="preview-player modern"></div>
+                                        <div class="preview-player modern"></div>
+                                    </div>
                                 </div>
                                 <span class="style-label">Modern</span>
                             </label>
@@ -664,20 +685,27 @@
                     </div>
                     <div class="settings-option-row">
                         <div class="color-picker-row">
-                            <button class="color-swatch" data-color="blue" style="background: #3b82f6;" title="Blau (Standard)"></button>
-                            <button class="color-swatch" data-color="purple" style="background: #8b5cf6;" title="Lila"></button>
-                            <button class="color-swatch" data-color="green" style="background: #10b981;" title="Grün"></button>
-                            <button class="color-swatch" data-color="orange" style="background: #f59e0b;" title="Orange"></button>
-                            <button class="color-swatch" data-color="pink" style="background: #ec4899;" title="Pink"></button>
-                            <button class="color-swatch" data-color="red" style="background: #ef4444;" title="Rot"></button>
-                            <button class="color-swatch" data-color="cyan" style="background: #06b6d4;" title="Cyan"></button>
+                            <button class="color-swatch" data-color="blue" style="background: #3b82f6;"
+                                title="Blau (Standard)"></button>
+                            <button class="color-swatch" data-color="purple" style="background: #8b5cf6;"
+                                title="Lila"></button>
+                            <button class="color-swatch" data-color="green" style="background: #10b981;"
+                                title="Grün"></button>
+                            <button class="color-swatch" data-color="orange" style="background: #f59e0b;"
+                                title="Orange"></button>
+                            <button class="color-swatch" data-color="pink" style="background: #ec4899;"
+                                title="Pink"></button>
+                            <button class="color-swatch" data-color="red" style="background: #ef4444;"
+                                title="Rot"></button>
+                            <button class="color-swatch" data-color="cyan" style="background: #06b6d4;"
+                                title="Cyan"></button>
                         </div>
                     </div>
                 </div>
 
                 <!-- TOGGLE EINSTELLUNGEN -->
                 <div class="settings-section">
-                                       <div class="settings-toggle-list">
+                    <div class="settings-toggle-list">
                         <div class="settings-toggle-item">
                             <div class="settings-toggle-info">
                                 <span class="settings-toggle-label">Kompakter Modus</span>
