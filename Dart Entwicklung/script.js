@@ -1620,13 +1620,13 @@
 					const item = document.createElement('div');
 					item.className = 'group-member-item';
 					item.innerHTML = `
-						<div class="group-member-info" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-							<div>
+						<div class="group-member-info" style="display: flex; justify-content: space-between; align-items: center; width: 100%; flex-wrap: nowrap; gap: 8px;">
+							<div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;">
 								<span class="member-name">${memberName}</span>
 							</div>
-							<div class="member-points" style="font-weight: bold; font-size: 0.85rem;">
+							<div class="member-points" style="font-weight: bold; font-size: 0.85rem; white-space: nowrap; flex-shrink: 0;">
 								<span style="color: ${pointsColor};">${member.points} Pkt.</span>
-								<span style="color: ${legsColor}; margin-left: 6px; font-size: 0.75rem;">(${member.plusPts}:${member.lostPts} Legs)</span>
+								<span style="color: ${legsColor}; margin-left: 4px; font-size: 0.75rem;">(${member.plusPts}:${member.lostPts} Legs)</span>
 							</div>
 						</div>
 					`;
@@ -1811,29 +1811,87 @@
 		}
 
 		groups.forEach((group, index) => {
+			const allCompleted = group.matches && group.matches.length > 0 && group.matches.every(m => m.completed);
 			const card = document.createElement('div');
-			card.className = 'group-card glass';
+			card.className = 'group-card glass' + (allCompleted ? ' completed' : '');
+			card.style.cursor = 'default'; // Im Archiv nicht anklickbar für Details
 
 			const header = document.createElement('div');
 			header.className = 'group-header';
 			header.innerHTML = `
-				<span class="group-title">${group.title || `Gruppe ${index + 1}`}</span>
-				<span class="group-badge">${group.members ? group.members.length : 0} ${group.members && group.members.length === 1 ? 'Mitglied' : 'Mitglieder'}</span>
+				<span class="group-title">${group.title || `Gruppe ${index + 1}`} ${allCompleted ? '<span style="color: var(--success); margin-left: 6px;">✓</span>' : ''}</span>
+				<span class="group-badge" style="${allCompleted ? 'border-color: var(--success); color: var(--success);' : ''}">${allCompleted ? 'Beendet' : `${group.members ? group.members.length : 0} ${group.members && group.members.length === 1 ? 'Mitglied' : 'Mitglieder'}`}</span>
 			`;
 
 			const body = document.createElement('div');
 			body.className = 'group-body';
 
 			if (group.members && group.members.length > 0) {
-				group.members.forEach(member => {
-					// FIX: Wenn member ein Objekt ist, den Namen auslesen (passiert beim Abspeichern des Turniers)
-					const memberName = typeof member === 'string' ? member : member.name;
+				const standings = {};
+				group.members.forEach(m => {
+					const mName = typeof m === 'string' ? m : m.name;
+					standings[mName] = { name: mName, Pt: 0, W: 0, plusPts: 0, lostPts: 0 };
+				});
+
+				(group.matches || []).forEach(match => {
+					if (match.completed && !TournamentManager.isBye(match.player1) && !TournamentManager.isBye(match.player2)) {
+						const p1 = match.player1;
+						const p2 = match.player2;
+						if (standings[p1] !== undefined) {
+							if (match.winner === p1) {
+								standings[p1].Pt += 1;
+								standings[p1].W += 1;
+							}
+							standings[p1].plusPts += (match.score1 || 0);
+							standings[p1].lostPts += (match.score2 || 0);
+						}
+						if (standings[p2] !== undefined) {
+							if (match.winner === p2) {
+								standings[p2].Pt += 1;
+								standings[p2].W += 1;
+							}
+							standings[p2].plusPts += (match.score2 || 0);
+							standings[p2].lostPts += (match.score1 || 0);
+						}
+					}
+				});
+
+				const sortedMembers = group.members.map(m => {
+					const mName = typeof m === 'string' ? m : m.name;
+					const st = standings[mName] || { Pt: 0, W: 0, plusPts: 0, lostPts: 0 };
+					return { name: mName, points: st.Pt, wins: st.W, plusPts: st.plusPts, lostPts: st.lostPts };
+				}).sort((a, b) => {
+					if (b.points !== a.points) return b.points - a.points;
+					// Tiebreaker 1: Mehr Plus-Punkte (gesamt erzielte Punkte)
+					if (b.plusPts !== a.plusPts) return b.plusPts - a.plusPts;
+					// Tiebreaker 2: Weniger Verlier-Punkte (kassierten Punkte)
+					if (a.lostPts !== b.lostPts) return a.lostPts - b.lostPts;
+					return a.name.localeCompare(b.name);
+				});
+
+				sortedMembers.forEach((member, idx) => {
+					const prev = sortedMembers[idx - 1];
+					const next = sortedMembers[idx + 1];
+					const isTiedWithPrev = prev && prev.points === member.points;
+					const isTiedWithNext = next && next.points === member.points;
+					const isLegDecided = isTiedWithPrev || isTiedWithNext;
+
+					const pointsColor = isLegDecided ? 'var(--text-main)' : 'var(--success)';
+					const legsColor = isLegDecided ? 'var(--success)' : 'var(--text-dim)';
+
+					const memberName = member.name;
 					const item = document.createElement('div');
 					item.className = 'group-member-item';
+					
 					item.innerHTML = `
-						<div class="group-member-info">
-							<span class="member-icon">🎯</span>
-							<span class="member-name">${memberName}</span>
+						<div class="group-member-info" style="display: flex; justify-content: space-between; align-items: center; width: 100%; flex-wrap: nowrap; gap: 8px;">
+							<div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;">
+								<span class="member-name">${memberName}</span>
+							</div>
+							<div class="member-points" style="font-weight: bold; font-size: 0.85rem; white-space: nowrap; flex-shrink: 0;">
+								<span style="color: ${pointsColor};">${member.points} Pkt.</span>
+								<span style="color: ${legsColor}; margin-left: 4px; font-size: 0.75rem;">(${member.plusPts}:${member.lostPts} Legs)</span>
+							</div>
 						</div>
 					`;
 					body.appendChild(item);
@@ -2713,7 +2771,7 @@
 
 		// Admin Controls
 		document.getElementById('createNewFormBtn').onclick = openFormBuilder;
-		document.getElementById('saveFormBtn').onclick = saveNewForm;
+		document.getElementById('saveFormBtn').onclick = submitFeedback;
 		document.getElementById('submitFeedbackBtn').onclick = submitFeedback;
 
 		window.addQuestionToBuilder = addQuestionToBuilder;
