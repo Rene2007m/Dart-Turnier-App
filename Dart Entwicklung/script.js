@@ -539,6 +539,20 @@
 					const idx = Math.floor(this.loserBracket[m.round].indexOf(m) / 2);
 					const isP1 = this.loserBracket[m.round].indexOf(m) % 2 === 0;
 					if (isP1) nextLR[idx].player1 = m.winner; else nextLR[idx].player2 = m.winner;
+					
+					// NEU: Halbfinale Verlierer der Bronze-Runde ins Spiel um Platz 3 (Bronze) schieben
+					if (this.hasGroups && m.round === this.loserBracket.length - 2) {
+						const lastRound = this.loserBracket[this.loserBracket.length - 1];
+						const lb3Match = lastRound.find(match => match.type === 'loser_3rd');
+						if (lb3Match) {
+							if (!TournamentManager.isBye(m.loser)) {
+								if (!lb3Match.player1) lb3Match.player1 = m.loser; else lb3Match.player2 = m.loser;
+							} else {
+								if (!lb3Match.player1) lb3Match.player1 = 'FREILOS'; else lb3Match.player2 = 'FREILOS';
+							}
+						}
+					}
+					
 					this.checkAllByeMatches();
 				} else {
 					if (!this.hasGroups) {
@@ -574,6 +588,11 @@
 				const next = [];
 				for (let i = 0; i < this.loserBracket[r].length; i += 2) next.push(this.createMatch(r + 1, null, null, 'loser'));
 				this.loserBracket.push(next); r++;
+			}
+			// NEU: Spiel um Platz 3 im Loser Bracket (Bronze), wenn Gruppenphase aktiv
+			if (this.hasGroups && this.loserBracket.length > 0 && this.loserBracket[0].length > 1) {
+				const thirdPlaceMatch = this.createMatch(r, null, null, 'loser_3rd');
+				this.loserBracket[r].push(thirdPlaceMatch);
 			}
 		}
 
@@ -1444,6 +1463,9 @@
 				if (type === 'winnerBracket') {
 					if (m.type === 'winner_3rd') titleHtml = `<div class="match-title bronze">🥉 Spiel um Platz 3</div>`;
 					else if (isFinalRound && m.type === 'winner') titleHtml = `<div class="match-title">🏆 Spiel um Platz 1</div>`;
+				} else if (type === 'loserBracket') {
+					if (m.type === 'loser_3rd') titleHtml = `<div class="match-title bronze">🥉 Spiel um Platz 3</div>`;
+					else if (isFinalRound && m.type === 'loser' && state.tournament.hasGroups) titleHtml = `<div class="match-title">🏆 Finale (Bronze)</div>`;
 				}
 				const div = document.createElement('div');
 				const isP1B = TournamentManager.isBye(m.player1);
@@ -1804,12 +1826,14 @@
 
 			if (group.members && group.members.length > 0) {
 				group.members.forEach(member => {
+					// FIX: Wenn member ein Objekt ist, den Namen auslesen (passiert beim Abspeichern des Turniers)
+					const memberName = typeof member === 'string' ? member : member.name;
 					const item = document.createElement('div');
 					item.className = 'group-member-item';
 					item.innerHTML = `
 						<div class="group-member-info">
 							<span class="member-icon">🎯</span>
-							<span class="member-name">${member}</span>
+							<span class="member-name">${memberName}</span>
 						</div>
 					`;
 					body.appendChild(item);
@@ -1856,7 +1880,7 @@
 		m.loser = m.score1 > m.score2 ? m.player2 : m.player1;
 
 		try {
-			if (m.type === 'winner' || m.type === 'winner_3rd' || m.type === 'loser') {
+			if (m.type === 'winner' || m.type === 'winner_3rd' || m.type === 'loser' || m.type === 'loser_3rd') {
 				t.advanceWinner(m);
 			} else if (m.type === 'group') {
 				// Gruppenübersicht auf der Hauptseite aktualisieren
@@ -1918,8 +1942,11 @@
 					matchTitle = isFinal ? "🏆 WB FINALE" : `Winner Bracket - Runde ${m.round + 1}`;
 				} else if (m.type === 'winner_3rd') {
 					matchTitle = "🥉 Spiel um Platz 3 (WB)";
+				} else if (m.type === 'loser_3rd') {
+					matchTitle = "🥉 Spiel um Platz 3 (Bronze)";
 				} else if (m.type === 'loser') {
-					matchTitle = `Second Chance - Runde ${m.round + 1}`;
+					const isFinal = m.round === t.loserBracket.length - 1;
+					matchTitle = (isFinal && t.hasGroups) ? "🏆 Bronze Finale" : `Second Chance - Runde ${m.round + 1}`;
 				} else if (m.type === 'group') {
 					let foundGroup = null;
 					if (m.groupIndex !== undefined && t.groups[m.groupIndex]) {
@@ -2313,6 +2340,9 @@
 				if (type === 'winnerBracket') {
 					if (m.type === 'winner_3rd') titleHtml = `<div class="match-title bronze">🥉 Spiel um Platz 3 im WB</div>`;
 					else if (isFinalRound && m.type === 'winner') titleHtml = `<div class="match-title">🏆 Spiel um Platz 1 im WB</div>`;
+				} else if (type === 'loserBracket') {
+					if (m.type === 'loser_3rd') titleHtml = `<div class="match-title bronze">🥉 Spiel um Platz 3 in Bronze</div>`;
+					else if (isFinalRound && m.type === 'loser' && tournament.hasGroups) titleHtml = `<div class="match-title">🏆 Finale (Bronze)</div>`;
 				}
 
 				const div = document.createElement('div');
