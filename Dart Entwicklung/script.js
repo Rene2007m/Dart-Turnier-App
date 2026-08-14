@@ -1498,7 +1498,7 @@
 		state.tournament[type].forEach((round, rI) => {
 			const isFinalRound = rI === state.tournament[type].length - 1;
 			const col = document.createElement('div'); col.className = 'bracket-round';
-			col.innerHTML = `<div class="badge" style="margin-bottom:15px; text-align:center">${isFinalRound ? (type === 'winnerBracket' ? "Finale & Platz 3" : "SC Finale") : `Runde ${rI + 1}`}</div>`;
+			col.innerHTML = `<div class="badge" style="margin-bottom:15px; text-align:center">${isFinalRound ? (type === 'winnerBracket' ? (state.tournament.hasGroups ? "Gold Finale" : "Finale & Platz 3") : (state.tournament.hasGroups ? "Bronze Finale" : "SC Finale")) : `Runde ${rI + 1}`}</div>`;
 			const matchesContainer = document.createElement('div'); matchesContainer.className = 'bracket-matches-container';
 			const matchElements = [];
 			round.forEach((m) => {
@@ -2036,19 +2036,27 @@
 				}
 			}
 
-			// News Feed Nachricht ertsllen
+			// News Feed Nachricht erstellen (mit dynamischer Benennung je nach Modus)
 			let matchTitle = m.title;
 			if (!matchTitle) {
 				if (m.type === 'winner') {
 					const isFinal = m.round === t.winnerBracket.length - 1;
-					matchTitle = isFinal ? "🏆 WB FINALE" : `Winner Bracket - Runde ${m.round + 1}`;
+					if (t.hasGroups) {
+						matchTitle = isFinal ? "🏆 Gold Finale" : `Gold Runde - Runde ${m.round + 1}`;
+					} else {
+						matchTitle = isFinal ? "🏆 WB FINALE" : `Winner Bracket - Runde ${m.round + 1}`;
+					}
 				} else if (m.type === 'winner_3rd') {
-					matchTitle = "🥉 Spiel um Platz 3 (WB)";
+					matchTitle = t.hasGroups ? "🥉 Spiel um Platz 3 (Gold)" : "🥉 Spiel um Platz 3 (WB)";
 				} else if (m.type === 'loser_3rd') {
 					matchTitle = "🥉 Spiel um Platz 3 (Bronze)";
 				} else if (m.type === 'loser') {
 					const isFinal = m.round === t.loserBracket.length - 1;
-					matchTitle = (isFinal && t.hasGroups) ? "🏆 Bronze Finale" : `Second Chance - Runde ${m.round + 1}`;
+					if (t.hasGroups) {
+						matchTitle = isFinal ? "🏆 Bronze Finale" : `Bronze Runde - Runde ${m.round + 1}`;
+					} else {
+						matchTitle = isFinal ? "🏆 Second Chance Finale" : `Second Chance - Runde ${m.round + 1}`;
+					}
 				} else if (m.type === 'group') {
 					let foundGroup = null;
 					if (m.groupIndex !== undefined && t.groups[m.groupIndex]) {
@@ -2072,19 +2080,25 @@
 				
 				if (pod.isGroup) {
 					newsContent = `
-						<div style="margin-bottom: 10px;">
-							<b style="color:gold; font-size: 1.1em;">🥇 Gold Runde</b><br>
-							👑 <b>1. Platz: ${pod.gold[0]}</b><br>
-							🥈 2. Platz: ${pod.gold[1]}<br>
-							🥉 3. Platz: ${pod.gold[2]}
+						<div style="display: flex; gap: 20px; flex-wrap: wrap; margin-top: 10px; margin-bottom: 15px;">
+							<div style="flex: 1; min-width: 200px; background: rgba(255, 215, 0, 0.05); border: 1px solid rgba(255, 215, 0, 0.2); border-radius: 8px; padding: 12px;">
+								<b style="color: gold; font-size: 1.1em; display: block; margin-bottom: 8px; border-bottom: 1px solid rgba(255, 215, 0, 0.2); padding-bottom: 4px;">🥇 Gold Runde</b>
+								<div style="line-height: 1.6;">
+									👑 <b>1. Platz:</b> ${pod.gold[0]}<br>
+									🥈 <b>2. Platz:</b> ${pod.gold[1]}<br>
+									🥉 <b>3. Platz:</b> ${pod.gold[2]}
+								</div>
+							</div>
+							<div style="flex: 1; min-width: 200px; background: rgba(205, 127, 50, 0.05); border: 1px solid rgba(205, 127, 50, 0.2); border-radius: 8px; padding: 12px;">
+								<b style="color: #cd7f32; font-size: 1.1em; display: block; margin-bottom: 8px; border-bottom: 1px solid rgba(205, 127, 50, 0.2); padding-bottom: 4px;">🥉 Bronze Runde</b>
+								<div style="line-height: 1.6;">
+									👑 <b>1. Platz:</b> ${pod.bronze[0]}<br>
+									🥈 <b>2. Platz:</b> ${pod.bronze[1]}<br>
+									🥉 <b>3. Platz:</b> ${pod.bronze[2]}
+								</div>
+							</div>
 						</div>
-						<div>
-							<b style="color:#cd7f32; font-size: 1.1em;">🥉 Bronze Runde</b><br>
-							👑 <b>1. Platz: ${pod.bronze[0]}</b><br>
-							🥈 2. Platz: ${pod.bronze[1]}<br>
-							🥉 3. Platz: ${pod.bronze[2]}
-						</div>
-						<br>Herzlichen Glückwunsch an alle Teilnehmer!
+						<div style="text-align: center; font-weight: bold; color: var(--primary);">Herzlichen Glückwunsch an alle Teilnehmer! 🎉</div>
 					`;
 				} else {
 					newsContent = `👑 <b>1. Platz: ${pod.single[0]}</b><br>🥈 2. Platz: ${pod.single[1]}<br>🥉 3. Platz: ${pod.single[2]}<br><br>Herzlichen Glückwunsch an alle Teilnehmer!`;
@@ -2356,8 +2370,8 @@
 		tabNav.innerHTML = `
 		<button class="tab-btn active" data-tab="archive-news">News</button>
 		${tournament.hasGroups ? '<button class="tab-btn" data-tab="archive-groups">👥 Gruppen</button>' : ''}
-		<button class="tab-btn" data-tab="archive-winner">Winner Bracket</button>
-		<button class="tab-btn" data-tab="archive-loser">Loser Bracket</button>
+		<button class="tab-btn" data-tab="archive-winner">${tournament.hasGroups ? '🥇 Gold Runde' : 'Winner Bracket'}</button>
+		<button class="tab-btn" data-tab="archive-loser">${tournament.hasGroups ? '🥉 Bronze Runde' : 'Loser Bracket'}</button>
 		${!tournament.hasGroups ? '<button class="tab-btn" data-tab="archive-stepladder">🏆 Stepladder Finale</button>' : ''}
 	`;
 		content.appendChild(tabNav);
@@ -2477,7 +2491,7 @@
 			const isFinalRound = rI === tournament[type].length - 1;
 			const col = document.createElement('div');
 			col.className = 'bracket-round';
-			col.innerHTML = `<div class="badge" style="margin-bottom:15px; text-align:center">${isFinalRound ? (type === 'winnerBracket' ? "Finale & Platz 3" : "LB Finale") : `Runde ${rI + 1}`}</div>`;
+			col.innerHTML = `<div class="badge" style="margin-bottom:15px; text-align:center">${isFinalRound ? (type === 'winnerBracket' ? (tournament.hasGroups ? "Gold Finale" : "Finale & Platz 3") : (tournament.hasGroups ? "Bronze Finale" : "LB Finale")) : `Runde ${rI + 1}`}</div>`;
 
 			const matchesContainer = document.createElement('div');
 			matchesContainer.className = 'bracket-matches-container';
@@ -2488,10 +2502,10 @@
 				groupDiv.className = 'match-group';
 				let titleHtml = '';
 				if (type === 'winnerBracket') {
-					if (m.type === 'winner_3rd') titleHtml = `<div class="match-title bronze">🥉 Spiel um Platz 3 im WB</div>`;
-					else if (isFinalRound && m.type === 'winner') titleHtml = `<div class="match-title">🏆 Spiel um Platz 1 im WB</div>`;
+					if (m.type === 'winner_3rd') titleHtml = `<div class="match-title bronze">🥉 Spiel um Platz 3 (Gold)</div>`;
+					else if (isFinalRound && m.type === 'winner') titleHtml = `<div class="match-title">🏆 Spiel um Platz 1</div>`;
 				} else if (type === 'loserBracket') {
-					if (m.type === 'loser_3rd') titleHtml = `<div class="match-title bronze">🥉 Spiel um Platz 3 in Bronze</div>`;
+					if (m.type === 'loser_3rd') titleHtml = `<div class="match-title bronze">🥉 Spiel um Platz 3 (Bronze)</div>`;
 					else if (isFinalRound && m.type === 'loser' && tournament.hasGroups) titleHtml = `<div class="match-title">🏆 Finale (Bronze)</div>`;
 				}
 
