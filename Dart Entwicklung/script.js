@@ -20,7 +20,7 @@
 		GAMES_COL: "planned_games" // Geplante Spiele
 	};
 
-	// Der aktuelle Zustand der App
+	// aktuelle Zustand der App
 	let state = {
 		isAdmin: false,
 		tournament: null,
@@ -33,10 +33,10 @@
 		currentForm: null,
 		plannedGames: [],
 		selectedDate: new Date().toISOString().split('T')[0],
-		currentCalendarMonth: new Date()
+		currentCalendarMonth: new Date(),
+		currentGroupIndex: null
 	};
 
-	// Hilfsvariable um "Flackern" der Warnung beim Speichern zu verhindern
 	let isSavingGame = false;
 
 	/**
@@ -45,7 +45,7 @@
 	 * ============================================================
 	 */
 
-	// Prüft ob der aktuelle User Admin-Rechte hat (Verhindert Bypass via F12)
+	// Prüft ob der aktuelle User Admin-Rechte hatE
 	function requireAdmin() {
 		if (!state.isAdmin) {
 			showToast("Zugriff verweigert: Admin-Rechte erforderlich!", "danger");
@@ -55,39 +55,13 @@
 		return true;
 	}
 
-	// Führt eine administrative Aktion nur nach erneuter Passworteingabe aus (Schutz vor F12 Manipulation)
+	// Führt eine administrative Aktion aus, sofern Admin-Rechte vorliegen
 	async function verifyAdminAction(onSuccess) {
 		if (!requireAdmin()) return;
-
-		const pwInput = document.createElement('input');
-		pwInput.type = 'password';
-		pwInput.className = 'form-input';
-		pwInput.placeholder = 'Admin-Passwort bestätigen';
-		pwInput.style.textAlign = 'center';
-
-		showCustomDialog({
-			title: "🛡️ Sicherheitsprüfung",
-			message: "Dies ist eine administrative Aktion. Bitte bestätige sie durch Eingabe des Admin-Passworts:",
-			customContent: pwInput,
-			confirmText: "Verifizieren",
-			onConfirm: async () => {
-				const inputHash = await hashPassword(pwInput.value);
-				try {
-					const adminSnap = await window.dbFunctions.getDoc(window.dbFunctions.doc(window.db, CONFIG.ADMIN_COL, "Admin"));
-					if (adminSnap.exists() && adminSnap.data().Passwort === inputHash) {
-						onSuccess();
-					} else {
-						showToast("Sicherheitsprüfung fehlgeschlagen: Falsches Passwort!", "danger");
-					}
-				} catch (e) {
-					console.error(e);
-					showToast("Fehler bei der Datenbankprüfung.", "danger");
-				}
-			}
-		});
+		onSuccess();
 	}
 
-	// Erzeugt einen SHA-256 Hash aus einem String 
+	// Hash generierung
 	async function hashPassword(password) {
 		const msgUint8 = new TextEncoder().encode(password);
 		const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
@@ -95,7 +69,7 @@
 		return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 	}
 
-	// Einfache Verschlüsselung für Namen
+	// Verschlüsselung für Namen
 	const CRYPTO_KEY = "dart_pro_2026_secure";
 	function encryptName(text) {
 		if (!text) return "";
@@ -167,7 +141,7 @@
 	 */
 
 	class TournamentManager {
-		constructor(name, players, shouldShuffle) {
+		constructor(name, players, shouldShuffle, hasGroups = false) {
 			this.name = name;
 			// Vearbeitet die Spielerliste (Mischen und aufüllen mit Freilosen)
 			this.players = this.processPlayers(players, shouldShuffle);
@@ -175,10 +149,165 @@
 			this.loserBracket = []; // Verlierer Baum
 			this.stepladder = []; // Top 3 Finale
 			this.news = []; // Turnier News Feed
+			this.hasGroups = hasGroups; // Ob Gruppenphase aktiviert ist
+			this.groups = []; // Gruppen-Einteilung
 			this.matchIdCounter = 0; // Eindeutige ID für jedes Match
 			this.tournamentOver = false; // Ist das Turnier beendet
 			this.wbToLbMap = {}; // Merkt sich welche Verlierer wohin im LB kommen
 			this.initializeBrackets();
+			if (this.hasGroups) {
+				this.generateGroups();
+			}
+		}
+
+		generateGroups(forceReshuffle = false) {
+			if (!this.hasGroups) return;
+			if (!forceReshuffle && this.groups && this.groups.length > 0) return;
+			const realPlayers = this.players.filter(p => p.trim() && !TournamentManager.isBye(p));
+			const groupTitles = ['Gruppe A', 'Gruppe B', 'Gruppe C', 'Gruppe D', 'Gruppe E', 'Gruppe F', 'Gruppe G', 'Gruppe H'];
+			this.groups = groupTitles.map(title => ({ title, members: [], matches: [] }));
+
+			// Zufälliges Mischen
+			for (let i = realPlayers.length - 1; i > 0; i--) {
+				const j = Math.floor(Math.random() * (i + 1));
+				[realPlayers[i], realPlayers[j]] = [realPlayers[j], realPlayers[i]];
+			}
+
+			realPlayers.forEach((player, idx) => {
+				this.groups[idx % this.groups.length].members.push(player);
+			});
+
+			// Generiere Jeder-gegen-Jeden Matches für jede Gruppe
+			this.groups.forEach(group => {
+				const m = group.members;
+				for (let i = 0; i < m.length; i++) {
+					for (let j = i + 1; j < m.length; j++) {
+						group.matches.push(this.createMatch(0, m[i], m[j], 'group'));
+					}
+				}
+			});
+		}
+
+		// Befüllt Gold und Bronze Runde aus den Gruppenergebnissen
+		populateBracketsFromGroups() {
+			if (!this.hasGroups || !this.groups || this.groups.length === 0) return;
+
+			// Prüfen ob bereits befüllt
+			if (this.winnerBracket[0] && this.winnerBracket[0].some(m => m.player1 || m.player2)) return;
+
+			const rank1Players = [];
+			const rank2Players = [];
+			const rank3Players = [];
+			const rank4Players = [];
+
+			this.groups.forEach(group => {
+				const standings = {};
+				(group.members || []).forEach(m => {
+					const mName = typeof m === 'string' ? m : m.name;
+					standings[mName] = { name: mName, Pt: 0, plusPts: 0, lostPts: 0 };
+				});
+
+				(group.matches || []).forEach(match => {
+					if (match.completed && !TournamentManager.isBye(match.player1) && !TournamentManager.isBye(match.player2)) {
+						const p1 = match.player1;
+						const p2 = match.player2;
+						if (standings[p1]) {
+							if (match.winner === p1) standings[p1].Pt += 1;
+							standings[p1].plusPts += (match.score1 || 0);
+							standings[p1].lostPts += (match.score2 || 0);
+						}
+						if (standings[p2]) {
+							if (match.winner === p2) standings[p2].Pt += 1;
+							standings[p2].plusPts += (match.score2 || 0);
+							standings[p2].lostPts += (match.score1 || 0);
+						}
+					}
+				});
+
+				const sorted = Object.values(standings).sort((a, b) => {
+					if (b.Pt !== a.Pt) return b.Pt - a.Pt;
+					if (b.plusPts !== a.plusPts) return b.plusPts - a.plusPts;
+					if (a.lostPts !== b.lostPts) return a.lostPts - b.lostPts;
+					return a.name.localeCompare(b.name);
+				});
+
+				if (sorted[0]) rank1Players.push(sorted[0].name);
+				if (sorted[1]) rank2Players.push(sorted[1].name);
+				if (sorted[2]) rank3Players.push(sorted[2].name);
+				if (sorted[3]) rank4Players.push(sorted[3].name);
+			});
+
+			// Mischt Array zufällig (Fisher-Yates)
+			const shuffle = (arr) => {
+				for (let i = arr.length - 1; i > 0; i--) {
+					const j = Math.floor(Math.random() * (i + 1));
+					[arr[i], arr[j]] = [arr[j], arr[i]];
+				}
+				return arr;
+			};
+
+			// Gold-Runde (Plätze 1 & 2): Zufällige Paarungen Rank1 vs Rank2 (niemals Rank1 vs Rank1)
+			shuffle(rank1Players);
+			shuffle(rank2Players);
+
+			const goldMatches = [];
+			for (let i = 0; i < rank1Players.length; i++) {
+				// Pair rank1 with rank2
+				const p1 = rank1Players[i];
+				const p2 = rank2Players[i] || 'FREILOS';
+				// Zufällige Seitenverteilung (wer Spieler 1 / Spieler 2 ist)
+				if (Math.random() < 0.5) {
+					goldMatches.push({ p1, p2 });
+				} else {
+					goldMatches.push({ p1: p2, p2: p1 });
+				}
+			}
+			shuffle(goldMatches);
+
+			// Gold Runde 1 neu aufbauen
+			const goldRound1 = [];
+			goldMatches.forEach(m => {
+				goldRound1.push(this.createMatch(0, m.p1, m.p2, 'winner'));
+			});
+			// Falls auffüllen nötig für Zweierpotenz
+			const targetGold = Math.pow(2, Math.ceil(Math.log2(goldRound1.length || 1)));
+			while (goldRound1.length < targetGold) {
+				goldRound1.push(this.createMatch(0, 'FREILOS', 'FREILOS', 'winner'));
+			}
+
+			this.winnerBracket = [goldRound1];
+			this.createWBRounds();
+
+			// Bronze-Runde (Plätze 3 & 4): Zufällige Paarungen Rank3 vs Rank4
+			shuffle(rank3Players);
+			shuffle(rank4Players);
+
+			const bronzeMatches = [];
+			const maxCount = Math.max(rank3Players.length, rank4Players.length);
+			for (let i = 0; i < maxCount; i++) {
+				const p1 = rank3Players[i] || 'FREILOS';
+				const p2 = rank4Players[i] || 'FREILOS';
+				if (Math.random() < 0.5) {
+					bronzeMatches.push({ p1, p2 });
+				} else {
+					bronzeMatches.push({ p1: p2, p2: p1 });
+				}
+			}
+			shuffle(bronzeMatches);
+
+			const bronzeRound1 = [];
+			bronzeMatches.forEach(m => {
+				bronzeRound1.push(this.createMatch(0, m.p1, m.p2, 'loser'));
+			});
+			const targetBronze = Math.pow(2, Math.ceil(Math.log2(bronzeRound1.length || 1)));
+			while (bronzeRound1.length < targetBronze) {
+				bronzeRound1.push(this.createMatch(0, 'FREILOS', 'FREILOS', 'loser'));
+			}
+
+			this.loserBracket = [bronzeRound1];
+			this.createLBRounds();
+
+			this.checkAllByeMatches();
 		}
 
 		// Hilfsfunktion: Erkennt ob ein Platz ein Freilos ist
@@ -234,8 +363,11 @@
 		initializeBrackets() {
 			// Winner Bracket Runde 1 füllen
 			const firstRound = [];
-			for (let i = 0; i < this.players.length; i += 2) {
-				firstRound.push(this.createMatch(0, this.players[i], this.players[i + 1], 'winner'));
+			const wbSlots = this.hasGroups ? Math.ceil(this.players.length / 2) : this.players.length;
+			for (let i = 0; i < wbSlots; i += 2) {
+				const p1 = this.hasGroups ? null : this.players[i];
+				const p2 = this.hasGroups ? null : this.players[i + 1];
+				firstRound.push(this.createMatch(0, p1, p2, 'winner'));
 			}
 			this.winnerBracket.push(firstRound);
 			this.createWBRounds();
@@ -249,7 +381,7 @@
 			});
 
 			// Optimierte LB-Größe: Nur so viele Plätze wie echte Verlierer nötig sind (Kategorie A)
-			const numRealLosers = catA.length;
+			const numRealLosers = this.hasGroups ? Math.floor(this.players.length / 2) : catA.length;
 			this.wbToLbMap = {};
 			if (this.players.length > 4 && numRealLosers > 0) {
 				// Kleinste Zweierpotenz um numRealLosers unterzubringen
@@ -285,9 +417,12 @@
 					[availableSlots[i], availableSlots[j]] = [availableSlots[j], availableSlots[i]];
 				}
 
-				// Mapping der echten Verlierer auf die zufälligen Plätze
-				catA.forEach((wbIdx, slotIdx) => {
-					this.wbToLbMap[wbIdx] = availableSlots[slotIdx];
+				// Mapping der Verlierer auf zufälligen Plätze (Freilose werde ignoriert)
+				const wbIndices = this.hasGroups ? [] : catA;
+				wbIndices.forEach((wbIdx, slotIdx) => {
+					if (availableSlots[slotIdx]) {
+						this.wbToLbMap[wbIdx] = availableSlots[slotIdx];
+					}
 				});
 
 				this.createLBRounds();
@@ -305,7 +440,7 @@
 			this.checkAllByeMatches();
 		}
 
-		// Prüft ob ein Match gegen ein Freilos stattfindet und rückt den Sieger automatisch weiter
+		// Prüft ob ein Match gegen ein Freilos stattfindet und packt den Sieger automatisch weiter
 		checkAllByeMatches() {
 			const processMatch = (m) => {
 				if (m.completed && !m.winner && (TournamentManager.isBye(m.player1) || TournamentManager.isBye(m.player2))) {
@@ -355,7 +490,9 @@
 								}
 							}
 						} else if (this.players.length <= 4) {
-							if (!this.stepladder[0].player1) this.stepladder[0].player1 = m.loser; else this.stepladder[0].player2 = m.loser;
+							if (!this.hasGroups) {
+								if (!this.stepladder[0].player1) this.stepladder[0].player1 = m.loser; else this.stepladder[0].player2 = m.loser;
+							}
 						}
 					}
 
@@ -373,22 +510,26 @@
 					}
 					this.checkAllByeMatches();
 				} else {
-					this.stepladder[2].player2 = m.winner;
-					this.stepladder[1].player2 = m.loser;
-					// Falls der Herausforderer bereits in Match 1 (step1) verloren hat und das Turnier auf ihn wartete
-					if (this.stepladder[0].completed && this.stepladder[0].winner === this.stepladder[0].player2) {
-						// Wenn jetzt Platz 1 und 2 feststehen, kann das Turnier beendet werden
-						if (this.stepladder[1].player2 && this.stepladder[2].player2) {
-							this.tournamentOver = true;
+					if (!this.hasGroups) {
+						this.stepladder[2].player2 = m.winner;
+						this.stepladder[1].player2 = m.loser;
+						// Falls der Herausforderer bereits in Match 1 (step1) verloren hat und das Turnier auf ihn wartete
+						if (this.stepladder[0].completed && this.stepladder[0].winner === this.stepladder[0].player2) {
+							// Wenn  Platz 1 und 2 feststehen wird das Turnier beendet 
+							if (this.stepladder[1].player2 && this.stepladder[2].player2) {
+								this.tournamentOver = true;
+							}
 						}
 					}
 				}
 			} else if (m.type === 'winner_3rd') {
-				this.stepladder[0].player2 = m.winner;
-				// Falls Match 1 bereits fertig ist und SC 1 verloren hat
-				if (this.stepladder[0].completed && this.stepladder[0].winner === this.stepladder[0].player2) {
-					if (this.stepladder[1].player2 && this.stepladder[2].player2) {
-						this.tournamentOver = true;
+				if (!this.hasGroups) {
+					this.stepladder[0].player2 = m.winner;
+					// Falls Match 1 bereits fertig ist und SC 1 verloren hat
+					if (this.stepladder[0].completed && this.stepladder[0].winner === this.stepladder[0].player2) {
+						if (this.stepladder[1].player2 && this.stepladder[2].player2) {
+							this.tournamentOver = true;
+						}
 					}
 				}
 			}
@@ -398,8 +539,26 @@
 					const idx = Math.floor(this.loserBracket[m.round].indexOf(m) / 2);
 					const isP1 = this.loserBracket[m.round].indexOf(m) % 2 === 0;
 					if (isP1) nextLR[idx].player1 = m.winner; else nextLR[idx].player2 = m.winner;
+					
+					// NEU: Halbfinale Verlierer der Bronze-Runde ins Spiel um Platz 3 (Bronze) schieben
+					if (this.hasGroups && m.round === this.loserBracket.length - 2) {
+						const lastRound = this.loserBracket[this.loserBracket.length - 1];
+						const lb3Match = lastRound.find(match => match.type === 'loser_3rd');
+						if (lb3Match) {
+							if (!TournamentManager.isBye(m.loser)) {
+								if (!lb3Match.player1) lb3Match.player1 = m.loser; else lb3Match.player2 = m.loser;
+							} else {
+								if (!lb3Match.player1) lb3Match.player1 = 'FREILOS'; else lb3Match.player2 = 'FREILOS';
+							}
+						}
+					}
+					
 					this.checkAllByeMatches();
-				} else this.stepladder[0].player1 = m.winner;
+				} else {
+					if (!this.hasGroups) {
+						this.stepladder[0].player1 = m.winner;
+					}
+				}
 			}
 		}
 
@@ -430,18 +589,28 @@
 				for (let i = 0; i < this.loserBracket[r].length; i += 2) next.push(this.createMatch(r + 1, null, null, 'loser'));
 				this.loserBracket.push(next); r++;
 			}
+			// NEU: Spiel um Platz 3 im Loser Bracket (Bronze), wenn Gruppenphase aktiv
+			if (this.hasGroups && this.loserBracket.length > 0 && this.loserBracket[0].length > 1) {
+				const thirdPlaceMatch = this.createMatch(r, null, null, 'loser_3rd');
+				this.loserBracket[r].push(thirdPlaceMatch);
+			}
 		}
 
 		// Verwandelt rohe Daten aus der Datenbank wieder in ein Objekt 
 		static fromJSON(data) {
-			const t = new TournamentManager(data.name || "Turnier", [], false);
+			const t = new TournamentManager(data.name || "Turnier", [], false, data.hasGroups === true);
 			Object.assign(t, data);
+			t.hasGroups = data.hasGroups === true;
 			const convert = (obj) => {
 				if (!obj || Array.isArray(obj)) return obj || [];
 				return Object.keys(obj).sort((a, b) => parseInt(a.split('_')[1]) - parseInt(b.split('_')[1])).map(k => obj[k]);
 			};
 			t.winnerBracket = convert(data.winnerBracket);
 			t.loserBracket = convert(data.loserBracket);
+			t.groups = data.groups || [];
+			if (t.hasGroups && (!t.groups || t.groups.length === 0)) {
+				t.generateGroups();
+			}
 			return t;
 		}
 	}
@@ -464,7 +633,7 @@
 				const dbPass = snap.data().password;
 				if (dbPass === inputHash) {
 					state.currentUser = { username, ...snap.data() };
-					// Admin-Rolle direkt aus dem User-Datensatz lesen
+					// Admin-Rolle prüfen
 					state.isAdmin = snap.data().isAdmin === true;
 					return true;
 				}
@@ -479,7 +648,7 @@
 	 * ============================================================
 	 */
 
-	// Aktualisiert die Liste der Teilnehmer ( wer ist ausgeschieden und wer noch im Turnier)
+	// Aktualisiert die Liste der Teilnehmer
 	function loadParticipants() {
 		const list = document.getElementById('participantsList');
 		if (!state.tournament) return;
@@ -497,6 +666,23 @@
 		t.winnerBracket.forEach(round => round.forEach(checkMatch));
 		t.loserBracket.forEach(round => round.forEach(checkMatch));
 		t.stepladder.forEach(checkMatch);
+
+		// Während der Gruppenphase sind ALLE Spieler aktiv 
+		if (t.hasGroups && t.groups && t.groups.length > 0) {
+			const bracketHasPlayers = t.winnerBracket.some(round =>
+				round.some(m => m.player1 || m.player2)
+			);
+			if (!bracketHasPlayers) {
+				// Gruppenphase läuft → alle Spieler aus allen Gruppen sind aktiv
+				t.groups.forEach(group => {
+					(group.members || []).forEach(p => {
+						if (p && !TournamentManager.isBye(p)) activePlayers.add(p);
+					});
+				});
+				//  alle allPlayers-Spieler die keiner Gruppe zugeordnet sind hinzufügen
+				allPlayers.forEach(p => activePlayers.add(p));
+			}
+		}
 
 		list.innerHTML = '';
 		const sorted = Array.from(allPlayers).sort((a, b) => {
@@ -527,7 +713,7 @@
 		const isAdmin = state.isAdmin;
 		document.getElementById('adminBadge').textContent = isAdmin ? `👑 Admin (${state.currentUser.username})` : `👤 Zuschauer (${state.currentUser.username})`;
 
-		// Admin Buttons werden nur angezeigt wenn man ein Admin ist
+		// Admin Buttons (werden nur angezeigt wenn man ein Admin ist)
 		document.getElementById('newTournamentBtn').classList.toggle('hidden', !isAdmin);
 		document.getElementById('deleteTournamentBtn').classList.toggle('hidden', !isAdmin || !state.tournament);
 		document.getElementById('userMgmtBtn').classList.toggle('hidden', !isAdmin);
@@ -539,28 +725,133 @@
 			document.getElementById('dashboardTitle').textContent = state.tournament.name;
 			document.getElementById('tournamentSection').classList.remove('hidden');
 			renderBracket('winnerBracket'); renderBracket('loserBracket'); renderStepladder(); renderNews();
+			if (state.tournament.hasGroups) renderGroups();
 
-			// Top 3 zeigen wenn das Turnier beendet wurde
+			const groupsAdmin = document.getElementById('groupsAdminControls');
+			if (groupsAdmin) groupsAdmin.classList.toggle('hidden', !isAdmin);
+
+			// Gruppen-Tab Button anzeigen -> wenn Gruppenphase aktiviert ist
+			const groupsTabBtn = document.querySelector('.tab-btn[data-tab="groupsSection"]');
+			const wbTabBtn = document.querySelector('.tab-btn[data-tab="winnerBracket"]');
+			const lbTabBtn = document.querySelector('.tab-btn[data-tab="loserBracket"]');
+			const stepladderTabBtn = document.querySelector('.tab-btn[data-tab="stepladderBracket"]');
+
+			const hasGroups = state.tournament.hasGroups === true;
+			if (groupsTabBtn) {
+				groupsTabBtn.classList.toggle('hidden', !hasGroups);
+				if (!hasGroups && groupsTabBtn.classList.contains('active')) {
+					groupsTabBtn.classList.remove('active');
+					document.getElementById('groupsSection')?.classList.remove('active');
+					const homeBtn = document.querySelector('.tab-btn[data-tab="homeSection"]');
+					if (homeBtn) homeBtn.classList.add('active');
+					document.getElementById('homeSection')?.classList.add('active');
+				}
+			}
+
+			// Prüfen ob alle Gruppenspiele abgeschlossen sind
+			let allGroupsCompleted = true;
+			if (hasGroups && state.tournament.groups) {
+				allGroupsCompleted = state.tournament.groups.length > 0 && state.tournament.groups.every(g =>
+					g.matches && g.matches.length > 0 && g.matches.every(m => m.completed)
+				);
+			}
+
+			// Gold- und Bronze-Runde ausblenden solange die Gruppenphase läuft
+			const showBrackets = !hasGroups || allGroupsCompleted;
+
+			if (wbTabBtn) {
+				wbTabBtn.textContent = hasGroups ? '🥇 Gold Runde' : 'Winner Bracket';
+				wbTabBtn.classList.toggle('hidden', !showBrackets);
+				if (!showBrackets && wbTabBtn.classList.contains('active')) {
+					wbTabBtn.classList.remove('active');
+					document.getElementById('winnerBracket')?.classList.remove('active');
+					const homeBtn = document.querySelector('.tab-btn[data-tab="homeSection"]');
+					if (homeBtn) homeBtn.classList.add('active');
+					document.getElementById('homeSection')?.classList.add('active');
+				}
+			}
+
+			if (lbTabBtn) {
+				lbTabBtn.textContent = hasGroups ? '🥉 Bronze Runde' : 'Second Chance';
+				lbTabBtn.classList.toggle('hidden', !showBrackets);
+				if (!showBrackets && lbTabBtn.classList.contains('active')) {
+					lbTabBtn.classList.remove('active');
+					document.getElementById('loserBracket')?.classList.remove('active');
+					const homeBtn = document.querySelector('.tab-btn[data-tab="homeSection"]');
+					if (homeBtn) homeBtn.classList.add('active');
+					document.getElementById('homeSection')?.classList.add('active');
+				}
+			}
+
+			if (stepladderTabBtn) {
+				stepladderTabBtn.classList.toggle('hidden', hasGroups);
+				if (hasGroups && stepladderTabBtn.classList.contains('active')) {
+					stepladderTabBtn.classList.remove('active');
+					document.getElementById('stepladderBracket')?.classList.remove('active');
+					const homeBtn = document.querySelector('.tab-btn[data-tab="homeSection"]');
+					if (homeBtn) homeBtn.classList.add('active');
+					document.getElementById('homeSection')?.classList.add('active');
+				}
+			}
+
+			// Falls das Gruppen-Modal aktiv ist, Ansicht automatisch neu rendern
+			const groupModal = document.getElementById('groupDetailsModal');
+			if (groupModal && groupModal.classList.contains('active') && state.currentGroupIndex !== null) {
+				openGroupDetails(state.currentGroupIndex);
+			}
+
+			// Top 3 zeigen -> wenn das Turnier beendet wurde
 			const rankingSec = document.getElementById('rankingSection');
 			if (state.tournament.tournamentOver) {
 				rankingSec.classList.remove('hidden');
 				const pod = calculatePodium(state.tournament);
-				document.getElementById('rank1').textContent = pod[0] || '-';
-				document.getElementById('rank2').textContent = pod[1] || '-';
-				document.getElementById('rank3').textContent = pod[2] || '-';
+				
+				if (pod.isGroup) {
+					// Dynamisches generieren der beiden Podeste
+					rankingSec.innerHTML = `
+						<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
+						<div style="display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;">
+							<div style="flex: 1; min-width: 300px;">
+								<h4 style="text-align: center; color: gold; margin-bottom: 10px;">🥇 Gold Runde</h4>
+								<div class="podium">
+									<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.gold[1]}</div></div>
+									<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.gold[0]}</div></div>
+									<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.gold[2]}</div></div>
+								</div>
+							</div>
+							<div style="flex: 1; min-width: 300px;">
+								<h4 style="text-align: center; color: #cd7f32; margin-bottom: 10px;">🥉 Bronze Runde</h4>
+								<div class="podium">
+									<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.bronze[1]}</div></div>
+									<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.bronze[0]}</div></div>
+									<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.bronze[2]}</div></div>
+								</div>
+							</div>
+						</div>
+					`;
+				} else {
+					rankingSec.innerHTML = `
+						<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
+						<div class="podium">
+							<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.single[1]}</div></div>
+							<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.single[0]}</div></div>
+							<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.single[2]}</div></div>
+						</div>
+					`;
+				}
 			} else {
 				rankingSec.classList.add('hidden');
 			}
 		}
 
-		// Aktualisiert die Info Knöpfe (Global, auch ohne Turnier)
+		// Aktualisiert die Info Knöpfe
 		document.getElementById('rulesBtn').onclick = () => showInfoContent(state.globalAssets?.rules);
 		document.getElementById('machineBtn').onclick = () => showInfoContent(state.globalAssets?.machine);
 
 		// Anzeigen oder Verstecken der Bearbeitungs Knöpfe
 		document.querySelectorAll('.admin-only').forEach(el => el.classList.toggle('hidden', !isAdmin));
 
-		// Admin Registrierungs-Button im Dashboard (falls Admin)
+		// Admin Registrierungs-Button im Dashboard 
 		const regBtn = document.getElementById('registrationBtn');
 		if (regBtn) regBtn.classList.toggle('hidden', !isAdmin);
 	}
@@ -628,25 +919,61 @@
 
 	// Berechnet Platz 1 bis 3 basierend auf dem Final-Status
 	function calculatePodium(t) {
-		const s = t.stepladder;
-		let r1 = s[2].player2; // WB 1 Default
-		let r2 = s[1].player2; // WB 2 Default
-		let r3 = s[0].player2; // WB 3 Default
+		if (t.hasGroups) {
+			let g1 = '-', g2 = '-', g3 = '-';
+			let b1 = '-', b2 = '-', b3 = '-';
+			
+			// Gold Runde Podium
+			if (t.winnerBracket && t.winnerBracket.length > 0) {
+				const finalRound = t.winnerBracket[t.winnerBracket.length - 1];
+				const finalMatch = finalRound.find(m => m.type === 'winner');
+				if (finalMatch && finalMatch.completed) {
+					g1 = finalMatch.winner;
+					g2 = finalMatch.loser;
+				}
+				const thirdMatch = finalRound.find(m => m.type === 'winner_3rd');
+				if (thirdMatch && thirdMatch.completed) {
+					g3 = thirdMatch.winner;
+				}
+			}
+			
+			// Bronze Runde Podium
+			if (t.loserBracket && t.loserBracket.length > 0) {
+				const finalRound = t.loserBracket[t.loserBracket.length - 1];
+				const finalMatch = finalRound.find(m => m.type === 'loser');
+				if (finalMatch && finalMatch.completed) {
+					b1 = finalMatch.winner;
+					b2 = finalMatch.loser;
+				}
+				const thirdMatch = finalRound.find(m => m.type === 'loser_3rd');
+				if (thirdMatch && thirdMatch.completed) {
+					b3 = thirdMatch.winner;
+				}
+			}
+			
+			return { isGroup: true, gold: [g1, g2, g3], bronze: [b1, b2, b3] };
+		}
 
-		if (s[2].completed) {
+		// Stepladder (ohne Gruppen)
+		const s = t.stepladder;
+		let r1 = s[2]?.player2 || '-'; // WB 1 Default
+		let r2 = s[1]?.player2 || '-'; // WB 2 Default
+		let r3 = s[0]?.player2 || '-'; // WB 3 Default
+
+		if (s[2] && s[2].completed) {
 			r1 = s[2].winner;
 			r2 = s[2].loser;
 			r3 = s[1].loser;
-		} else if (s[1].completed) {
+		} else if (s[1] && s[1].completed) {
 			r1 = s[2].player2;
 			r2 = s[1].winner;
 			r3 = s[1].loser;
-		} else if (s[0].completed) {
+		} else if (s[0] && s[0].completed) {
 			r1 = s[2].player2;
 			r2 = s[1].player2;
 			r3 = s[0].winner;
 		}
-		return [r1, r2, r3];
+		return { isGroup: false, single: [r1, r2, r3] };
 	}
 
 	// Zeigt Text oder Bilder in einem Vollbild Fenster an
@@ -687,7 +1014,7 @@
 		wrapper.appendChild(btnImg);
 		wrapper.appendChild(btnTxt);
 
-		// Fragen ob ein Bild oder ein Text hochgeladen werden soll
+		// Bild oder Text frage
 		showCustomDialog({
 			title: "Inhalt bearbeiten",
 			message: "Möchtest du ein Bild hochladen oder einen Text eingeben?",
@@ -911,6 +1238,9 @@
 	// Zeichnet die Verbindungslinien zwischen den Matches
 	function drawConnectors(svg, rounds, gradientId) {
 		const containerRect = svg.parentElement.getBoundingClientRect();
+		// Alle vorhandenen Pfade vorher entfernen, um Überlappungen zu vermeiden
+		const existingPaths = svg.querySelectorAll('path');
+		existingPaths.forEach(p => p.remove());
 		for (let roundIndex = 0; roundIndex < rounds.length - 1; roundIndex++) {
 			const currentRound = rounds[roundIndex];
 			const nextRound = rounds[roundIndex + 1];
@@ -931,7 +1261,7 @@
 
 				const xRight = r1.right - containerRect.left;
 				const xLeftNext = rN.left - containerRect.left;
-				const xMid = xRight + 20;
+				const xMid = (xRight + xLeftNext) / 2;
 
 				const y1 = r1.top - containerRect.top + r1.height / 2;
 				const y2 = r2.top - containerRect.top + r2.height / 2;
@@ -944,15 +1274,17 @@
 				}
 
 				if (m1Hide) {
-					// Only from bottom match
 					path.setAttribute('d', `M ${xRight} ${y2} L ${xMid} ${y2} L ${xMid} ${yN} L ${xLeftNext} ${yN}`);
 				} else if (m2Hide) {
-					// Only from top match
 					path.setAttribute('d', `M ${xRight} ${y1} L ${xMid} ${y1} L ${xMid} ${yN} L ${xLeftNext} ${yN}`);
 				} else {
-					// Both visible, draw fork
 					const yMid = (y1 + y2) / 2;
-					path.setAttribute('d', `M ${xRight} ${y1} L ${xMid} ${y1} L ${xMid} ${y2} L ${xRight} ${y2} M ${xMid} ${yMid} L ${xLeftNext} ${yMid} L ${xLeftNext} ${yN}`);
+					path.setAttribute('d',
+						`M ${xRight} ${y1} L ${xMid} ${y1}` +
+						` L ${xMid} ${y2}` +
+						` L ${xRight} ${y2}` +
+						` M ${xMid} ${yMid} L ${xLeftNext} ${yN}`
+					);
 				}
 				svg.appendChild(path);
 
@@ -966,9 +1298,18 @@
 						if (document.body.classList.contains('bracket-modern') && gradientId) {
 							path3rd.style.stroke = `url(#${gradientId})`;
 						}
-						const d = m1Hide ? `M ${xRight} ${y2} L ${xMid} ${y2} L ${xMid} ${y3} L ${xLeftNext} ${y3}` :
-							m2Hide ? `M ${xRight} ${y1} L ${xMid} ${y1} L ${xMid} ${y3} L ${xLeftNext} ${y3}` :
-								`M ${xRight} ${y1} L ${xMid} ${y1} L ${xMid} ${y2} L ${xRight} ${y2} M ${xMid} ${(y1 + y2) / 2} L ${xLeftNext} ${(y1 + y2) / 2} L ${xLeftNext} ${y3}`;
+						let d;
+						if (m1Hide) {
+							d = `M ${xRight} ${y2} L ${xMid} ${y2} L ${xMid} ${y3} L ${xLeftNext} ${y3}`;
+						} else if (m2Hide) {
+							d = `M ${xRight} ${y1} L ${xMid} ${y1} L ${xMid} ${y3} L ${xLeftNext} ${y3}`;
+						} else {
+							const yMid2 = (y1 + y2) / 2;
+							d = `M ${xRight} ${y1} L ${xMid} ${y1}` +
+								` L ${xMid} ${y2}` +
+								` L ${xRight} ${y2}` +
+								` M ${xMid} ${yMid2} L ${xLeftNext} ${y3}`;
+						}
 						path3rd.setAttribute('d', d);
 						svg.appendChild(path3rd);
 					}
@@ -977,7 +1318,6 @@
 		}
 	}
 
-	// Hilfsfunktion: Findet geplante Spielzeit für ein Match
 	/**
 	 * ============================================================
 	 * SETTINGS SYSTEM
@@ -987,10 +1327,11 @@
 	const SETTINGS_KEY = 'dartTurnierSettings';
 	const SETTINGS_DEFAULTS = {
 		bracketStyle: 'classic',  // 'classic' | 'modern'
-		accentColor:  'blue',     // 'blue' | 'purple' | 'green' | 'orange' | 'pink' | 'red' | 'cyan'
-		compact:      false,      // Kompakter Modus
-		connectors:   true,       // SVG-Verbindungslinien
-		newsRefresh:  false       // News Autorefresh alle 30s
+		accentColor: 'blue',     // 'blue' | 'purple' | 'green' | 'orange' | 'pink' | 'red' | 'cyan'
+		compact: false,      // Kompakter Modus
+		connectors: true,       // SVG-Verbindungslinien
+		newsRefresh: false,      // News Autorefresh alle 30s
+		showTileLabels: false     // Kachel-Beschriftung dauerhaft anzeigen
 	};
 
 	let appSettings = { ...SETTINGS_DEFAULTS };
@@ -1017,15 +1358,15 @@
 		}
 	}
 
-	// Wendet alle Settings auf das body-Element an
+	// Wendet alle Settings an
 	function applySettings() {
 		const body = document.body;
 
 		// Bracket-Stil
 		body.classList.toggle('bracket-modern', appSettings.bracketStyle === 'modern');
 
-		// Akzentfarbe: alle accent-* Klassen entfernen, dann neue setzen
-		['blue','purple','green','orange','pink','red','cyan'].forEach(c => body.classList.remove(`accent-${c}`));
+		// Akzentfarbe
+		['blue', 'purple', 'green', 'orange', 'pink', 'red', 'cyan'].forEach(c => body.classList.remove(`accent-${c}`));
 		if (appSettings.accentColor !== 'blue') body.classList.add(`accent-${appSettings.accentColor}`);
 
 		// Kompakter Modus
@@ -1033,6 +1374,9 @@
 
 		// Verbindungslinien
 		body.classList.toggle('no-connectors', !appSettings.connectors);
+
+		// Kachel-Beschriftung dauerhaft anzeigen
+		body.classList.toggle('show-tile-labels', appSettings.showTileLabels);
 
 		// News Autorefresh
 		if (newsRefreshInterval) { clearInterval(newsRefreshInterval); newsRefreshInterval = null; }
@@ -1053,12 +1397,22 @@
 		});
 
 		// Toggles
-		document.getElementById('settingCompact').checked     = appSettings.compact;
-		document.getElementById('settingConnectors').checked  = appSettings.connectors;
+		document.getElementById('settingCompact').checked = appSettings.compact;
+		document.getElementById('settingConnectors').checked = appSettings.connectors;
 		document.getElementById('settingNewsRefresh').checked = appSettings.newsRefresh;
+		document.getElementById('settingTileLabels').checked = appSettings.showTileLabels;
+
+		// Sidebar: immer auf ersten Reiter (Allgemein) zurücksetzen
+		document.querySelectorAll('.settings-nav-item').forEach(b => b.classList.remove('active'));
+		const firstNav = document.querySelector('.settings-nav-item[data-tab="allgemein"]');
+		if (firstNav) firstNav.classList.add('active');
+		document.querySelectorAll('.settings-tab-pane').forEach(p => p.classList.remove('active'));
+		const firstPane = document.getElementById('settingsTab-allgemein');
+		if (firstPane) firstPane.classList.add('active');
 
 		document.getElementById('settingsModal').classList.add('active');
 	}
+
 
 	// Liest die Formular-Werte aus und wendet sie sofort an
 	function applyAndSaveSettings() {
@@ -1071,14 +1425,15 @@
 		if (activeColor) appSettings.accentColor = activeColor.dataset.color;
 
 		// Toggles
-		appSettings.compact     = document.getElementById('settingCompact').checked;
-		appSettings.connectors  = document.getElementById('settingConnectors').checked;
+		appSettings.compact = document.getElementById('settingCompact').checked;
+		appSettings.connectors = document.getElementById('settingConnectors').checked;
 		appSettings.newsRefresh = document.getElementById('settingNewsRefresh').checked;
+		appSettings.showTileLabels = document.getElementById('settingTileLabels').checked;
 
 		saveSettings();
 		applySettings();
 
-		// Brackets neu rendern falls Turnier aktiv
+		// Brackets neu rendern -> wenn Turnier aktiv
 		if (state.tournament) {
 			renderBracket('winnerBracket');
 			renderBracket('loserBracket');
@@ -1103,7 +1458,7 @@
 		showToast('↺ Einstellungen zurückgesetzt', 'primary');
 	}
 
-	// Formatiert eine Uhrzeit ("HH:MM") nach dem gewählten Format (24h)
+	// Uhrzeit formatieren
 	function formatTime(timeStr) {
 		return timeStr;
 	}
@@ -1112,7 +1467,7 @@
 		if (!player1 || !player2 || !state.plannedGames || state.plannedGames.length === 0) return null;
 		const title1 = `${player1} vs. ${player2}`;
 		const title2 = `${player2} vs. ${player1}`;
-		const game = state.plannedGames.find(g => g.title === title1 || g.title === title2);
+		const game = state.plannedGames.find(g => g.title.startsWith(title1) || g.title.startsWith(title2));
 		if (!game) return null;
 		const dateObj = new Date(game.date);
 		const formattedDate = new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(dateObj);
@@ -1127,7 +1482,6 @@
 		svg.setAttribute('class', 'bracket-connector');
 		Object.assign(svg.style, { position: 'absolute', top: '0', left: '0', width: '100%', height: '100%' });
 
-		// Gradient-Definition für Modern-Style Linien einfügen
 		const gradientId = 'bracketGradient_' + type;
 		if (document.body.classList.contains('bracket-modern')) {
 			const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
@@ -1144,15 +1498,18 @@
 		state.tournament[type].forEach((round, rI) => {
 			const isFinalRound = rI === state.tournament[type].length - 1;
 			const col = document.createElement('div'); col.className = 'bracket-round';
-			col.innerHTML = `<div class="badge" style="margin-bottom:15px; text-align:center">${isFinalRound ? (type === 'winnerBracket' ? "Finale & Platz 3" : "SC Finale") : `Runde ${rI + 1}`}</div>`;
+			col.innerHTML = `<div class="badge" style="margin-bottom:15px; text-align:center">${isFinalRound ? (type === 'winnerBracket' ? (state.tournament.hasGroups ? "Gold Finale" : "Finale & Platz 3") : (state.tournament.hasGroups ? "Bronze Finale" : "SC Finale")) : `Runde ${rI + 1}`}</div>`;
 			const matchesContainer = document.createElement('div'); matchesContainer.className = 'bracket-matches-container';
 			const matchElements = [];
 			round.forEach((m) => {
 				const groupDiv = document.createElement('div'); groupDiv.className = 'match-group';
 				let titleHtml = '';
 				if (type === 'winnerBracket') {
-					if (m.type === 'winner_3rd') titleHtml = `<div class="match-title bronze">🥉 Spiel um Platz 3 im WB</div>`;
-					else if (isFinalRound && m.type === 'winner') titleHtml = `<div class="match-title">🏆 Spiel um Platz 1 im WB</div>`;
+					if (m.type === 'winner_3rd') titleHtml = `<div class="match-title bronze">🥉 Spiel um Platz 3</div>`;
+					else if (isFinalRound && m.type === 'winner') titleHtml = `<div class="match-title">🏆 Spiel um Platz 1</div>`;
+				} else if (type === 'loserBracket') {
+					if (m.type === 'loser_3rd') titleHtml = `<div class="match-title bronze">🥉 Spiel um Platz 3</div>`;
+					else if (isFinalRound && m.type === 'loser' && state.tournament.hasGroups) titleHtml = `<div class="match-title">🏆 Finale (Bronze)</div>`;
 				}
 				const div = document.createElement('div');
 				const isP1B = TournamentManager.isBye(m.player1);
@@ -1164,19 +1521,26 @@
                 <div class="match-vs">vs</div>
                 <div class="match-player ${m.winner === m.player2 && m.completed ? 'winner' : (m.loser === m.player2 && m.completed ? 'loser' : '')}"><span>${m.player2 || 'TBD'}</span><span class="match-score">${m.score1 === 0 && m.score2 === 0 && m.completed && isP2B ? '' : m.score2}</span></div>`;
 				if (state.isAdmin && m.player1 && m.player2 && !isP1B && !isP2B) div.onclick = () => openMatch(m);
-				// Spielzeit aus dem Kalender anzeigen (nur wenn nicht abgeschlossen und kein reines BYE-Match)
+				// Spielzeit aus dem Kalender anzeigen (immer reservierter Container für konsistente Kachelhöhe)
+				const scheduleInfo = (!isPureBye && m.player1 && m.player2 && !isP1B && !isP2B) ? getScheduledGameInfo(m.player1, m.player2) : null;
+				const schedDiv = document.createElement('div');
 				if (!m.completed && !isPureBye && m.player1 && m.player2 && !isP1B && !isP2B) {
-					const scheduleInfo = getScheduledGameInfo(m.player1, m.player2);
-					const schedDiv = document.createElement('div');
 					schedDiv.className = 'match-schedule' + (scheduleInfo ? '' : ' not-scheduled');
 					schedDiv.textContent = scheduleInfo || '⏳ Noch nicht geplant';
-					div.appendChild(schedDiv);
+				} else {
+					// Reservierter unsichtbarer Platzhalter bei abgeschlossenen Matches, damit die Höhe exakt gleich bleibt
+					schedDiv.className = 'match-schedule placeholder';
+					schedDiv.style.visibility = 'hidden';
+					schedDiv.textContent = '⏳ Placeholder';
 				}
+				div.appendChild(schedDiv);
+
 				groupDiv.appendChild(div); matchesContainer.appendChild(groupDiv); matchElements.push(div);
 			});
 			col.appendChild(matchesContainer); container.appendChild(col); rounds.push({ col, matches: matchElements });
 		});
-		setTimeout(() => drawConnectors(svg, rounds, gradientId), 100);
+		setTimeout(() => drawConnectors(svg, rounds, gradientId), 50);
+		setTimeout(() => drawConnectors(svg, rounds, gradientId), 300);
 	}
 
 	// Generiert das visuelle HTML für das Stepladder Finale
@@ -1203,6 +1567,392 @@
 		});
 	}
 
+	// Generiert das visuelle HTML für die Gruppen-Übersicht
+	function renderGroups() {
+		const container = document.getElementById('groupsContainer');
+		if (!container) return;
+		container.innerHTML = '';
+
+		if (!state.tournament) {
+			container.innerHTML = '<p style="color: var(--text-dim); text-align: center; grid-column: 1 / -1; padding: 40px;">Kein aktives Turnier.</p>';
+			return;
+		}
+
+		const t = state.tournament;
+		if (!t.groups || t.groups.length === 0) {
+			if (typeof t.generateGroups === 'function') {
+				t.generateGroups();
+			} else {
+				const realPlayers = (t.players || []).filter(p => p.trim() && !TournamentManager.isBye(p));
+				const groupTitles = ['Gruppe A', 'Gruppe B', 'Gruppe C', 'Gruppe D', 'Gruppe E', 'Gruppe F', 'Gruppe G', 'Gruppe H'];
+				t.groups = groupTitles.map(title => ({ title, members: [] }));
+				realPlayers.forEach((player, idx) => {
+					t.groups[idx % t.groups.length].members.push(player);
+				});
+			}
+		}
+
+		t.groups.forEach((group, index) => {
+			const allCompleted = group.matches && group.matches.length > 0 && group.matches.every(m => m.completed);
+			const card = document.createElement('div');
+			card.className = 'group-card glass' + (allCompleted ? ' completed' : '');
+
+			const header = document.createElement('div');
+			header.className = 'group-header';
+			header.innerHTML = `
+				<span class="group-title">${group.title || `Gruppe ${index + 1}`} ${allCompleted ? '<span style="color: var(--success); margin-left: 6px;">✓</span>' : ''}</span>
+				<span class="group-badge" style="${allCompleted ? 'border-color: var(--success); color: var(--success);' : ''}">${allCompleted ? 'Beendet' : `${group.members ? group.members.length : 0} ${group.members && group.members.length === 1 ? 'Mitglied' : 'Mitglieder'}`}</span>
+			`;
+
+			const body = document.createElement('div');
+			body.className = 'group-body';
+
+			if (group.members && group.members.length > 0) {
+				const standings = {};
+				group.members.forEach(m => {
+					const mName = typeof m === 'string' ? m : m.name;
+					standings[mName] = { name: mName, Pt: 0, W: 0, plusPts: 0, lostPts: 0 };
+				});
+
+				(group.matches || []).forEach(match => {
+					if (match.completed && !TournamentManager.isBye(match.player1) && !TournamentManager.isBye(match.player2)) {
+						const p1 = match.player1;
+						const p2 = match.player2;
+						if (standings[p1] !== undefined) {
+							if (match.winner === p1) {
+								standings[p1].Pt += 1;
+								standings[p1].W += 1;
+							}
+							standings[p1].plusPts += (match.score1 || 0);
+							standings[p1].lostPts += (match.score2 || 0);
+						}
+						if (standings[p2] !== undefined) {
+							if (match.winner === p2) {
+								standings[p2].Pt += 1;
+								standings[p2].W += 1;
+							}
+							standings[p2].plusPts += (match.score2 || 0);
+							standings[p2].lostPts += (match.score1 || 0);
+						}
+					}
+				});
+
+				const sortedMembers = group.members.map(m => {
+					const mName = typeof m === 'string' ? m : m.name;
+					const st = standings[mName] || { Pt: 0, W: 0, plusPts: 0, lostPts: 0 };
+					return { name: mName, points: st.Pt, wins: st.W, plusPts: st.plusPts, lostPts: st.lostPts };
+				}).sort((a, b) => {
+					if (b.points !== a.points) return b.points - a.points;
+					// Tiebreaker 1: Mehr Plus-Punkte (gesamt erzielte Punkte)
+					if (b.plusPts !== a.plusPts) return b.plusPts - a.plusPts;
+					// Tiebreaker 2: Weniger Verlier-Punkte (kassierten Punkte)
+					if (a.lostPts !== b.lostPts) return a.lostPts - b.lostPts;
+					return a.name.localeCompare(b.name);
+				});
+
+				sortedMembers.forEach((member, idx) => {
+					const prev = sortedMembers[idx - 1];
+					const next = sortedMembers[idx + 1];
+					const isTiedWithPrev = prev && prev.points === member.points;
+					const isTiedWithNext = next && next.points === member.points;
+					const isLegDecided = isTiedWithPrev || isTiedWithNext;
+
+					const pointsColor = isLegDecided ? 'var(--text-main)' : 'var(--success)';
+					const legsColor = isLegDecided ? 'var(--success)' : 'var(--text-dim)';
+
+					const memberName = member.name;
+					const item = document.createElement('div');
+					item.className = 'group-member-item';
+					item.innerHTML = `
+						<div class="group-member-info" style="display: flex; justify-content: space-between; align-items: center; width: 100%; flex-wrap: nowrap; gap: 8px;">
+							<div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;">
+								<span class="member-name">${memberName}</span>
+							</div>
+							<div class="member-points" style="font-weight: bold; font-size: 0.85rem; white-space: nowrap; flex-shrink: 0;">
+								<span style="color: ${pointsColor};">${member.points} Pkt.</span>
+								<span style="color: ${legsColor}; margin-left: 4px; font-size: 0.75rem;">(${member.plusPts}:${member.lostPts} Legs)</span>
+							</div>
+						</div>
+					`;
+					body.appendChild(item);
+				});
+			} else {
+				const empty = document.createElement('div');
+				empty.className = 'group-empty';
+				empty.textContent = 'Mitglieder';
+				body.appendChild(empty);
+			}
+
+			card.style.cursor = 'pointer';
+			card.onclick = () => openGroupDetails(index);
+			card.appendChild(header);
+			card.appendChild(body);
+			container.appendChild(card);
+		});
+	}
+
+	function openGroupDetails(groupIndex) {
+		const t = state.tournament;
+		if (!t || !t.groups || !t.groups[groupIndex]) return;
+		state.currentGroupIndex = groupIndex;
+		const group = t.groups[groupIndex];
+
+		document.getElementById('groupDetailsTitle').textContent = `GRUPPENPHASE - ${group.title || `GRUPPE ${groupIndex + 1}`}`;
+
+		// Platz berechnen
+		const standings = {};
+		group.members.forEach(m => {
+			const mName = typeof m === 'string' ? m : m.name;
+			standings[mName] = { name: mName, G: 0, W: 0, L: 0, Pt: 0, plusPts: 0, lostPts: 0 };
+		});
+
+		(group.matches || []).forEach(match => {
+			if (match.completed && !TournamentManager.isBye(match.player1) && !TournamentManager.isBye(match.player2)) {
+				const p1 = match.player1;
+				const p2 = match.player2;
+				if (!standings[p1]) standings[p1] = { name: p1, G: 0, W: 0, L: 0, Pt: 0, plusPts: 0, lostPts: 0 };
+				if (!standings[p2]) standings[p2] = { name: p2, G: 0, W: 0, L: 0, Pt: 0, plusPts: 0, lostPts: 0 };
+
+				standings[p1].G++;
+				standings[p2].G++;
+
+				if (match.winner === p1) {
+					standings[p1].W++;
+					standings[p1].Pt += 1;
+					standings[p2].L++;
+				} else if (match.winner === p2) {
+					standings[p2].W++;
+					standings[p2].Pt += 1;
+					standings[p1].L++;
+				}
+				// Plus-Punkte und Verlier-Punkte für alle Spiele akkumulieren
+				standings[p1].plusPts += (match.score1 || 0);
+				standings[p1].lostPts += (match.score2 || 0);
+				standings[p2].plusPts += (match.score2 || 0);
+				standings[p2].lostPts += (match.score1 || 0);
+			}
+		});
+
+		const standingArray = Object.values(standings).sort((a, b) => {
+			if (b.Pt !== a.Pt) return b.Pt - a.Pt;
+			// Tiebreaker 1: Mehr Plus-Punkte (gesamt erzielte Punkte)
+			if (b.plusPts !== a.plusPts) return b.plusPts - a.plusPts;
+			// Tiebreaker 2: Weniger Verlier-Punkte (kassierten Punkte)
+			if (a.lostPts !== b.lostPts) return a.lostPts - b.lostPts;
+			return a.name.localeCompare(b.name);
+		});
+
+		// Bestimme für jeden Spieler, worauf die Platzierung im Vergleich zu den Nachbarn basiert
+		standingArray.forEach((s, idx) => {
+			s.decidedBy = 'Pt'; // Standardmäßig durch Punkte entschieden
+
+			// Prüfe den Vergleich mit dem Vorgänger oder Nachfolger bei Punktgleichheit
+			const prev = standingArray[idx - 1];
+			const next = standingArray[idx + 1];
+
+			const tiedWithPrev = prev && prev.Pt === s.Pt;
+			const tiedWithNext = next && next.Pt === s.Pt;
+
+			if (tiedWithPrev || tiedWithNext) {
+				// Wenn Punktgleichheit besteht, entschied die Leg-Differenz bzw. Leg-Punkte den Platz
+				s.decidedBy = 'Legs';
+			}
+		});
+
+		// Punkte updaten
+		group.members = group.members.map(m => {
+			const mName = typeof m === 'string' ? m : m.name;
+			const pts = standings[mName] ? standings[mName].Pt : 0;
+			return { name: mName, points: pts };
+		});
+
+		const tbody = document.getElementById('groupStandingsBody');
+		tbody.innerHTML = '';
+		standingArray.forEach((s, idx) => {
+			const tr = document.createElement('tr');
+			const ptStyle = s.decidedBy === 'Pt' ? 'color: var(--success); font-weight: bold;' : '';
+			const legsStyle = s.decidedBy === 'Legs' ? 'color: var(--success); font-weight: bold;' : '';
+
+			tr.innerHTML = `
+				<td>${idx + 1}</td>
+				<td>
+					<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-dim);margin-right:8px;"></span>
+					${s.name}
+				</td>
+				<td style="text-align: center;">${s.G}</td>
+				<td style="text-align: center;">${s.W}</td>
+				<td style="text-align: center;">${s.L}</td>
+				<td style="text-align: center; ${ptStyle}">${s.Pt}</td>
+				<td style="text-align: center; ${legsStyle}">${s.plusPts}:${s.lostPts}</td>
+			`;
+			tbody.appendChild(tr);
+		});
+
+		const matchesList = document.getElementById('groupMatchesList');
+		matchesList.innerHTML = '';
+		(group.matches || []).forEach((match, mIdx) => {
+			const row = document.createElement('div');
+			row.className = 'group-match-row ' + (state.isAdmin ? 'admin-clickable' : '');
+
+			let scoreText = match.completed ? `${match.score1}:${match.score2}` : '-:-';
+
+			let p1Class = 'gm-player';
+			let p2Class = 'gm-player';
+
+			if (match.completed) {
+				if (match.winner === match.player1) {
+					p1Class += ' winner';
+					p2Class += ' loser';
+				} else if (match.winner === match.player2) {
+					p2Class += ' winner';
+					p1Class += ' loser';
+				}
+			}
+
+			let scheduleHtml = '';
+			if (!match.completed && match.player1 && match.player2) {
+				const scheduleInfo = getScheduledGameInfo(match.player1, match.player2);
+				if (scheduleInfo) {
+					scheduleHtml = `<div class="group-match-schedule" style="grid-column: 1 / -1; text-align: center; font-size: 0.7rem; color: var(--primary); margin-top: 5px; font-weight: bold; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 5px;">${scheduleInfo}</div>`;
+				} else {
+					scheduleHtml = `<div class="group-match-schedule not-scheduled" style="grid-column: 1 / -1; text-align: center; font-size: 0.7rem; color: var(--text-dim); opacity: 0.5; margin-top: 5px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 5px;">⏳ Noch nicht geplant</div>`;
+				}
+			}
+
+			row.innerHTML = `
+				<div style="font-size:1.1rem;font-weight:bold;color:var(--text-dim);text-align:center;">${mIdx + 1}</div>
+				<div class="${p1Class}" style="justify-content: flex-end;">${match.player1}</div>
+				<div style="text-align: center; color: var(--text-dim); font-size: 0.8rem;">VS</div>
+				<div class="${p2Class}">${match.player2}</div>
+				<div class="gm-score">${scoreText}</div>
+				${scheduleHtml}
+			`;
+
+			if (state.isAdmin) {
+				row.onclick = () => {
+					match.groupIndex = groupIndex; // Attach group index for handleResult
+					openMatch(match);
+				};
+			}
+			matchesList.appendChild(row);
+		});
+
+		document.getElementById('groupDetailsModal').classList.add('active');
+	}
+
+	// Rendert Gruppen für archiviertes Turnier
+	function renderArchivedGroups(tournament, container) {
+		if (!container) return;
+		container.innerHTML = '';
+		let groups = tournament.groups;
+		if (!groups || groups.length === 0) {
+			const realPlayers = (tournament.players || []).filter(p => p.trim() && !TournamentManager.isBye(p));
+			const groupTitles = ['Gruppe A', 'Gruppe B', 'Gruppe C', 'Gruppe D', 'Gruppe E', 'Gruppe F', 'Gruppe G', 'Gruppe H'];
+			groups = groupTitles.map(title => ({ title, members: [] }));
+			realPlayers.forEach((player, idx) => {
+				groups[idx % groups.length].members.push(player);
+			});
+		}
+
+		groups.forEach((group, index) => {
+			const allCompleted = group.matches && group.matches.length > 0 && group.matches.every(m => m.completed);
+			const card = document.createElement('div');
+			card.className = 'group-card glass' + (allCompleted ? ' completed' : '');
+			card.style.cursor = 'default'; // Im Archiv nicht anklickbar für Details
+
+			const header = document.createElement('div');
+			header.className = 'group-header';
+			header.innerHTML = `
+				<span class="group-title">${group.title || `Gruppe ${index + 1}`} ${allCompleted ? '<span style="color: var(--success); margin-left: 6px;">✓</span>' : ''}</span>
+				<span class="group-badge" style="${allCompleted ? 'border-color: var(--success); color: var(--success);' : ''}">${allCompleted ? 'Beendet' : `${group.members ? group.members.length : 0} ${group.members && group.members.length === 1 ? 'Mitglied' : 'Mitglieder'}`}</span>
+			`;
+
+			const body = document.createElement('div');
+			body.className = 'group-body';
+
+			if (group.members && group.members.length > 0) {
+				const standings = {};
+				group.members.forEach(m => {
+					const mName = typeof m === 'string' ? m : m.name;
+					standings[mName] = { name: mName, Pt: 0, W: 0, plusPts: 0, lostPts: 0 };
+				});
+
+				(group.matches || []).forEach(match => {
+					if (match.completed && !TournamentManager.isBye(match.player1) && !TournamentManager.isBye(match.player2)) {
+						const p1 = match.player1;
+						const p2 = match.player2;
+						if (standings[p1] !== undefined) {
+							if (match.winner === p1) {
+								standings[p1].Pt += 1;
+								standings[p1].W += 1;
+							}
+							standings[p1].plusPts += (match.score1 || 0);
+							standings[p1].lostPts += (match.score2 || 0);
+						}
+						if (standings[p2] !== undefined) {
+							if (match.winner === p2) {
+								standings[p2].Pt += 1;
+								standings[p2].W += 1;
+							}
+							standings[p2].plusPts += (match.score2 || 0);
+							standings[p2].lostPts += (match.score1 || 0);
+						}
+					}
+				});
+
+				const sortedMembers = group.members.map(m => {
+					const mName = typeof m === 'string' ? m : m.name;
+					const st = standings[mName] || { Pt: 0, W: 0, plusPts: 0, lostPts: 0 };
+					return { name: mName, points: st.Pt, wins: st.W, plusPts: st.plusPts, lostPts: st.lostPts };
+				}).sort((a, b) => {
+					if (b.points !== a.points) return b.points - a.points;
+					// Tiebreaker 1: Mehr Plus-Punkte (gesamt erzielte Punkte)
+					if (b.plusPts !== a.plusPts) return b.plusPts - a.plusPts;
+					// Tiebreaker 2: Weniger Verlier-Punkte (kassierten Punkte)
+					if (a.lostPts !== b.lostPts) return a.lostPts - b.lostPts;
+					return a.name.localeCompare(b.name);
+				});
+
+				sortedMembers.forEach((member, idx) => {
+					const prev = sortedMembers[idx - 1];
+					const next = sortedMembers[idx + 1];
+					const isTiedWithPrev = prev && prev.points === member.points;
+					const isTiedWithNext = next && next.points === member.points;
+					const isLegDecided = isTiedWithPrev || isTiedWithNext;
+
+					const pointsColor = isLegDecided ? 'var(--text-main)' : 'var(--success)';
+					const legsColor = isLegDecided ? 'var(--success)' : 'var(--text-dim)';
+
+					const memberName = member.name;
+					const item = document.createElement('div');
+					item.className = 'group-member-item';
+					
+					item.innerHTML = `
+						<div class="group-member-info" style="display: flex; justify-content: space-between; align-items: center; width: 100%; flex-wrap: nowrap; gap: 8px;">
+							<div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;">
+								<span class="member-name">${memberName}</span>
+							</div>
+							<div class="member-points" style="font-weight: bold; font-size: 0.85rem; white-space: nowrap; flex-shrink: 0;">
+								<span style="color: ${pointsColor};">${member.points} Pkt.</span>
+								<span style="color: ${legsColor}; margin-left: 4px; font-size: 0.75rem;">(${member.plusPts}:${member.lostPts} Legs)</span>
+							</div>
+						</div>
+					`;
+					body.appendChild(item);
+				});
+			} else {
+				const empty = document.createElement('div');
+				empty.className = 'group-empty';
+				empty.textContent = 'Mitglieder';
+				body.appendChild(empty);
+			}
+
+			card.appendChild(header);
+			card.appendChild(body);
+			container.appendChild(card);
+		});
+	}
+
 	/**
 	 * ============================================================
 	 * 9. ERGEBNIS-EINGABE & SPEICHERN
@@ -1212,6 +1962,7 @@
 
 	// Öffnet das Eingabefenster für einen Punktestand
 	function openMatch(m) {
+		if (!requireAdmin()) return;
 		state.editingMatch = m;
 		document.getElementById('matchModalContent').innerHTML = `<div style="margin-bottom:15px"><label>${m.player1}</label><input type="number" id="sc1" class="form-input" value="${m.score1}"></div><div><label>${m.player2}</label><input type="number" id="sc2" class="form-input" value="${m.score2}"></div>`;
 		document.getElementById('matchModal').classList.add('active');
@@ -1231,8 +1982,23 @@
 		m.loser = m.score1 > m.score2 ? m.player2 : m.player1;
 
 		try {
-			if (m.type === 'winner' || m.type === 'winner_3rd' || m.type === 'loser') {
+			if (m.type === 'winner' || m.type === 'winner_3rd' || m.type === 'loser' || m.type === 'loser_3rd') {
 				t.advanceWinner(m);
+			} else if (m.type === 'group') {
+				// Gruppenübersicht auf der Hauptseite aktualisieren
+				renderGroups();
+				// Re-render group details directly falls offen.
+				if (m.groupIndex !== undefined) {
+					openGroupDetails(m.groupIndex);
+				}
+
+				// Prüfen ob alle Gruppenspiele beendet sind -> Falls ja: Brackets aus Gruppenergebnissen befüllen
+				const allCompleted = t.groups && t.groups.length > 0 && t.groups.every(g =>
+					g.matches && g.matches.length > 0 && g.matches.every(match => match.completed)
+				);
+				if (allCompleted) {
+					t.populateBracketsFromGroups();
+				}
 			} else if (m.type === 'stepladder') {
 				if (m.id === 'step1') {
 					if (m.winner === m.player1) {
@@ -1261,16 +2027,44 @@
 				}
 			}
 
-			// Erstellt eine Nachricht für den News Feed
+			if (t.hasGroups) {
+				const goldFinished = t.winnerBracket.length > 0 && t.winnerBracket.every(round => round.every(match => match.completed));
+				const bronzeFinished = t.loserBracket.length > 0 && t.loserBracket.every(round => round.every(match => match.completed));
+				
+				if (goldFinished && bronzeFinished) {
+					t.tournamentOver = true;
+				}
+			}
+
+			// News Feed Nachricht erstellen (mit dynamischer Benennung je nach Modus)
 			let matchTitle = m.title;
 			if (!matchTitle) {
 				if (m.type === 'winner') {
 					const isFinal = m.round === t.winnerBracket.length - 1;
-					matchTitle = isFinal ? "🏆 WB FINALE" : `Winner Bracket - Runde ${m.round + 1}`;
+					if (t.hasGroups) {
+						matchTitle = isFinal ? "🏆 Gold Finale" : `Gold Runde - Runde ${m.round + 1}`;
+					} else {
+						matchTitle = isFinal ? "🏆 WB FINALE" : `Winner Bracket - Runde ${m.round + 1}`;
+					}
 				} else if (m.type === 'winner_3rd') {
-					matchTitle = "🥉 Spiel um Platz 3 (WB)";
+					matchTitle = t.hasGroups ? "🥉 Spiel um Platz 3 (Gold)" : "🥉 Spiel um Platz 3 (WB)";
+				} else if (m.type === 'loser_3rd') {
+					matchTitle = "🥉 Spiel um Platz 3 (Bronze)";
 				} else if (m.type === 'loser') {
-					matchTitle = `Second Chance - Runde ${m.round + 1}`;
+					const isFinal = m.round === t.loserBracket.length - 1;
+					if (t.hasGroups) {
+						matchTitle = isFinal ? "🏆 Bronze Finale" : `Bronze Runde - Runde ${m.round + 1}`;
+					} else {
+						matchTitle = isFinal ? "🏆 Second Chance Finale" : `Second Chance - Runde ${m.round + 1}`;
+					}
+				} else if (m.type === 'group') {
+					let foundGroup = null;
+					if (m.groupIndex !== undefined && t.groups[m.groupIndex]) {
+						foundGroup = t.groups[m.groupIndex];
+					} else {
+						foundGroup = t.groups.find(g => g.matches && g.matches.some(match => match.id === m.id));
+					}
+					matchTitle = foundGroup ? foundGroup.title : "Gruppenspiel";
 				} else {
 					matchTitle = "Match";
 				}
@@ -1282,20 +2076,28 @@
 
 			if (t.tournamentOver) {
 				const pod = calculatePodium(t);
-				await addSystemNews(`🎊 TURNIER BEENDET 🎊`, `👑 <b>1. Platz: ${pod[0]}</b><br>🥈 2. Platz: ${pod[1]}<br>🥉 3. Platz: ${pod[2]}<br><br>Herzlichen Glückwunsch an alle Teilnehmer!`, false);
+				let newsContent = "";
+				
+				if (pod.isGroup) {
+					newsContent = `🏅 <b>Gold Runde</b><br><br>👑 <b>1. Platz: ${pod.gold[0]}</b><br>🥈 2. Platz: ${pod.gold[1]}<br>🥉 3. Platz: ${pod.gold[2]}<br><br>🥉 <b>Bronze Runde</b><br><br>👑 <b>1. Platz: ${pod.bronze[0]}</b><br>🥈 2. Platz: ${pod.bronze[1]}<br>🥉 3. Platz: ${pod.bronze[2]}<br><br>Herzlichen Glückwunsch an alle Teilnehmer!`;
+				} else {
+					newsContent = `👑 <b>1. Platz: ${pod.single[0]}</b><br>🥈 2. Platz: ${pod.single[1]}<br>🥉 3. Platz: ${pod.single[2]}<br><br>Herzlichen Glückwunsch an alle Teilnehmer!`;
+				}
+				
+				await addSystemNews(`🎊 TURNIER BEENDET 🎊`, newsContent, false);
 
-				// Auto-Archivierung: Turnier sofort archivieren wenn es beendet ist
-				await saveToCloud(); // Erst speichern
-				await archiveTournament(); // Dann archivieren
-				return; // Frühzeitiger Return, da bereits gespeichert
+				// Auto-Archivierung -> Turnier wird archivieren wenn es beendet ist
+				await saveToCloud(); // speichern
+				await archiveTournament(); // archivieren
+				return;
 			}
 
 
-			// Automatische Löschung des geplanten Spiels aus dem Kalender, wenn das Ergebnis eingetragen wurde
+			// Automatische Löschung des geplanten Spiels aus dem Kalender -> wenn das Ergebnis eingetragen wurde
 			if (state.plannedGames && state.plannedGames.length > 0) {
 				const plannedMatch = state.plannedGames.find(g =>
-					g.title === `${m.player1} vs. ${m.player2}` ||
-					g.title === `${m.player2} vs. ${m.player1}`
+					g.title.startsWith(`${m.player1} vs. ${m.player2}`) ||
+					g.title.startsWith(`${m.player2} vs. ${m.player1}`)
 				);
 				if (plannedMatch) {
 					const { doc, deleteDoc } = window.dbFunctions;
@@ -1304,12 +2106,13 @@
 			}
 
 			await saveToCloud();
+			updateUI();
 		} finally {
 			document.getElementById('matchModal').classList.remove('active');
 		}
 	}
 
-	// Speichert den aktuellen Turnier Status in die Datenbank
+	// Turnier Status in die Datenbank speichern
 	async function saveToCloud() {
 		if (!state.tournament || !window.dbFunctions) return;
 		const { doc, setDoc } = window.dbFunctions;
@@ -1320,6 +2123,8 @@
 			stepladder: state.tournament.stepladder, winnerBracket: winnerObj,
 			loserBracket: loserObj, tournamentOver: state.tournament.tournamentOver,
 			news: state.tournament.news || [],
+			hasGroups: state.tournament.hasGroups === true,
+			groups: state.tournament.groups || [],
 			wbToLbMap: state.tournament.wbToLbMap || {},
 			matchIdCounter: state.tournament.matchIdCounter || 0
 		});
@@ -1362,6 +2167,8 @@
 			loserBracket: loserObj,
 			tournamentOver: state.tournament.tournamentOver,
 			news: state.tournament.news || [],
+			hasGroups: state.tournament.hasGroups === true,
+			groups: state.tournament.groups || [],
 			wbToLbMap: state.tournament.wbToLbMap || {},
 			matchIdCounter: state.tournament.matchIdCounter || 0,
 			archivedAt: Date.now()
@@ -1413,8 +2220,8 @@
 			state.archivedTournaments = archives;
 			list.innerHTML = '';
 
-			archives.forEach(archive => {
-				const date = new Date(archive.archivedAt).toLocaleString('de-DE', {
+			archives.forEach(archiveData => {
+				const date = new Date(archiveData.archivedAt).toLocaleString('de-DE', {
 					day: '2-digit',
 					month: '2-digit',
 					year: 'numeric',
@@ -1422,8 +2229,17 @@
 					minute: '2-digit'
 				});
 
-				// Berechne Top 3
-				const podium = calculatePodium(archive);
+				// FIX: Daten aus der DB in ein sauberes Objekt mit echten Arrays umwandeln
+				const archiveObj = TournamentManager.fromJSON(archiveData);
+
+				// Berechne Top 3 (oder Gold/Bronze) basierend auf dem sauberen Objekt
+				const podium = calculatePodium(archiveObj);
+				let podiumHtml = '';
+				if (podium.isGroup) {
+					podiumHtml = `<span style="color:gold">🥇 Gold: ${podium.gold[0] || '-'}</span> | <span style="color:#cd7f32">🥇 Bronze: ${podium.bronze[0] || '-'}</span>`;
+				} else {
+					podiumHtml = `🥇 ${podium.single[0] || '-'} | 🥈 ${podium.single[1] || '-'} | 🥉 ${podium.single[2] || '-'}`;
+				}
 
 				const div = document.createElement('div');
 				div.className = 'participant-item';
@@ -1432,9 +2248,9 @@
 				// Layouting
 				const infoDiv = document.createElement('div');
 				infoDiv.innerHTML = `
-				<b style="font-size: 1rem;">${archive.name}</b><br>
+				<b style="font-size: 1rem;">${archiveData.name}</b><br>
 				<small style="color:var(--text-dim)">📅 ${date}</small><br>
-				<small style="color:var(--primary)">🥇 ${podium[0] || '-'} | 🥈 ${podium[1] || '-'} | 🥉 ${podium[2] || '-'}</small>
+				<small style="color:var(--primary)">${podiumHtml}</small>
 			`;
 
 				const controlsDiv = document.createElement('div');
@@ -1450,7 +2266,7 @@
 					delBtn.title = 'Löschen';
 					delBtn.onclick = (e) => {
 						e.stopPropagation();
-						deleteArchivedTournament(archive.id);
+						deleteArchivedTournament(archiveData.id);
 					};
 					controlsDiv.appendChild(delBtn);
 				}
@@ -1464,7 +2280,8 @@
 				div.appendChild(infoDiv);
 				div.appendChild(controlsDiv);
 
-				div.onclick = () => viewArchivedTournament(archive);
+				// Weiterhin die originalen Archivdaten übergeben für die Detailansicht
+				div.onclick = () => viewArchivedTournament(archiveData);
 				list.appendChild(div);
 			});
 		} catch (e) {
@@ -1491,23 +2308,39 @@
 			const podiumDiv = document.createElement('div');
 			podiumDiv.className = 'card glass ranking-card';
 			podiumDiv.style.marginBottom = '20px';
-			podiumDiv.innerHTML = `
-			<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
-			<div class="podium">
-				<div class="podium-item second">
-					<div class="rank">2</div>
-					<div class="player-name">${pod[1] || '-'}</div>
-				</div>
-				<div class="podium-item first">
-					<div class="rank">1</div>
-					<div class="player-name">${pod[0] || '-'}</div>
-				</div>
-				<div class="podium-item third">
-					<div class="rank">3</div>
-					<div class="player-name">${pod[2] || '-'}</div>
-				</div>
-			</div>
-		`;
+			
+			if (pod.isGroup) {
+				podiumDiv.innerHTML = `
+					<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
+					<div style="display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;">
+						<div style="flex: 1; min-width: 250px;">
+							<h4 style="text-align: center; color: gold; margin-bottom: 10px;">🥇 Gold Runde</h4>
+							<div class="podium">
+								<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.gold[1]}</div></div>
+								<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.gold[0]}</div></div>
+								<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.gold[2]}</div></div>
+							</div>
+						</div>
+						<div style="flex: 1; min-width: 250px;">
+							<h4 style="text-align: center; color: #cd7f32; margin-bottom: 10px;">🥉 Bronze Runde</h4>
+							<div class="podium">
+								<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.bronze[1]}</div></div>
+								<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.bronze[0]}</div></div>
+								<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.bronze[2]}</div></div>
+							</div>
+						</div>
+					</div>
+				`;
+			} else {
+				podiumDiv.innerHTML = `
+					<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
+					<div class="podium">
+						<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.single[1]}</div></div>
+						<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.single[0]}</div></div>
+						<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.single[2]}</div></div>
+					</div>
+				`;
+			}
 			content.appendChild(podiumDiv);
 		}
 
@@ -1516,19 +2349,27 @@
 		tabNav.className = 'tab-nav';
 		tabNav.innerHTML = `
 		<button class="tab-btn active" data-tab="archive-news">News</button>
-		<button class="tab-btn" data-tab="archive-winner">Winner Bracket</button>
-		<button class="tab-btn" data-tab="archive-loser">Loser Bracket</button>
-		<button class="tab-btn" data-tab="archive-stepladder">🏆 Stepladder Finale</button>
+		${tournament.hasGroups ? '<button class="tab-btn" data-tab="archive-groups">👥 Gruppen</button>' : ''}
+		<button class="tab-btn" data-tab="archive-winner">${tournament.hasGroups ? '🥇 Gold Runde' : 'Winner Bracket'}</button>
+		<button class="tab-btn" data-tab="archive-loser">${tournament.hasGroups ? '🥉 Bronze Runde' : 'Loser Bracket'}</button>
+		${!tournament.hasGroups ? '<button class="tab-btn" data-tab="archive-stepladder">🏆 Stepladder Finale</button>' : ''}
 	`;
 		content.appendChild(tabNav);
 
-		// Tab Contents
+		// Tab Inhalte
 		const newsTab = document.createElement('div');
 		newsTab.id = 'archive-news';
 		newsTab.className = 'tab-content active';
 		newsTab.style.marginTop = '20px';
 		renderArchivedNews(newsTab, tournament.news || []);
 		content.appendChild(newsTab);
+
+		const groupsTab = document.createElement('div');
+		groupsTab.id = 'archive-groups';
+		groupsTab.className = 'tab-content';
+		groupsTab.style.marginTop = '20px';
+		groupsTab.innerHTML = '<div class="groups-grid"></div>';
+		content.appendChild(groupsTab);
 
 		const winnerTab = document.createElement('div');
 		winnerTab.id = 'archive-winner';
@@ -1551,7 +2392,7 @@
 		stepladderTab.innerHTML = '<div class="bracket-scroll" style="position: relative;"></div>';
 		content.appendChild(stepladderTab);
 
-		// Tab switching
+		// Tab wechseln
 		tabNav.querySelectorAll('.tab-btn').forEach(btn => {
 			btn.onclick = () => {
 				tabNav.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -1559,8 +2400,10 @@
 				btn.classList.add('active');
 				content.querySelector(`#${btn.dataset.tab}`).classList.add('active');
 
-				// Render brackets when tab is opened
-				if (btn.dataset.tab === 'archive-winner') {
+				// Rendert brackets wenn Tab aktiv 
+				if (btn.dataset.tab === 'archive-groups') {
+					renderArchivedGroups(tournament, groupsTab.querySelector('.groups-grid'));
+				} else if (btn.dataset.tab === 'archive-winner') {
 					renderArchivedBracket(tournament, 'winnerBracket', winnerTab.querySelector('.bracket-scroll'));
 				} else if (btn.dataset.tab === 'archive-loser') {
 					renderArchivedBracket(tournament, 'loserBracket', loserTab.querySelector('.bracket-scroll'));
@@ -1571,7 +2414,7 @@
 		});
 	}
 
-	// Rendert News für archiviertes Turnier
+	// Rendert News für archivierte Turniere
 	function renderArchivedNews(container, news) {
 		const sortedNews = [...news].sort((a, b) => {
 			if (a.pinned && !b.pinned) return -1;
@@ -1610,7 +2453,6 @@
 		svg.setAttribute('class', 'bracket-connector');
 		Object.assign(svg.style, { position: 'absolute', top: '0', left: '0', width: '100%', height: '100%' });
 
-		// Gradient-Definition für Modern-Style Linien einfügen
 		const gradientId = 'bracketGradient_archived_' + type;
 		if (document.body.classList.contains('bracket-modern')) {
 			const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
@@ -1629,7 +2471,7 @@
 			const isFinalRound = rI === tournament[type].length - 1;
 			const col = document.createElement('div');
 			col.className = 'bracket-round';
-			col.innerHTML = `<div class="badge" style="margin-bottom:15px; text-align:center">${isFinalRound ? (type === 'winnerBracket' ? "Finale & Platz 3" : "LB Finale") : `Runde ${rI + 1}`}</div>`;
+			col.innerHTML = `<div class="badge" style="margin-bottom:15px; text-align:center">${isFinalRound ? (type === 'winnerBracket' ? (tournament.hasGroups ? "Gold Finale" : "Finale & Platz 3") : (tournament.hasGroups ? "Bronze Finale" : "LB Finale")) : `Runde ${rI + 1}`}</div>`;
 
 			const matchesContainer = document.createElement('div');
 			matchesContainer.className = 'bracket-matches-container';
@@ -1640,8 +2482,11 @@
 				groupDiv.className = 'match-group';
 				let titleHtml = '';
 				if (type === 'winnerBracket') {
-					if (m.type === 'winner_3rd') titleHtml = `<div class="match-title bronze">🥉 Spiel um Platz 3 im WB</div>`;
-					else if (isFinalRound && m.type === 'winner') titleHtml = `<div class="match-title">🏆 Spiel um Platz 1 im WB</div>`;
+					if (m.type === 'winner_3rd') titleHtml = `<div class="match-title bronze">🥉 Spiel um Platz 3 (Gold)</div>`;
+					else if (isFinalRound && m.type === 'winner') titleHtml = `<div class="match-title">🏆 Spiel um Platz 1</div>`;
+				} else if (type === 'loserBracket') {
+					if (m.type === 'loser_3rd') titleHtml = `<div class="match-title bronze">🥉 Spiel um Platz 3 (Bronze)</div>`;
+					else if (isFinalRound && m.type === 'loser' && tournament.hasGroups) titleHtml = `<div class="match-title">🏆 Finale (Bronze)</div>`;
 				}
 
 				const div = document.createElement('div');
@@ -1691,7 +2536,7 @@
 	 */
 
 	document.addEventListener('DOMContentLoaded', () => {
-		// Settings sofort beim Laden anwenden
+		// Settings beim Laden anwenden
 		loadSettings();
 
 		// Settings-Button
@@ -1700,7 +2545,21 @@
 		document.getElementById('applySettingsBtn').onclick = applyAndSaveSettings;
 		document.getElementById('resetSettingsBtn').onclick = resetSettings;
 
-		// Farbpalette: Klick auf Swatch markiert diesen
+		// Settings Sidebar Navigation (Apple-Stil)
+		document.querySelectorAll('.settings-nav-item').forEach(btn => {
+			btn.onclick = () => {
+				// Nav-Items: active setzen
+				document.querySelectorAll('.settings-nav-item').forEach(b => b.classList.remove('active'));
+				btn.classList.add('active');
+				// Tab-Panes: aktiven wechseln
+				const tab = btn.dataset.tab;
+				document.querySelectorAll('.settings-tab-pane').forEach(p => p.classList.remove('active'));
+				const pane = document.getElementById('settingsTab-' + tab);
+				if (pane) pane.classList.add('active');
+			};
+		});
+
+		// Farbpalette
 		document.querySelectorAll('.color-swatch').forEach(btn => {
 			btn.onclick = () => {
 				document.querySelectorAll('.color-swatch').forEach(b => b.classList.remove('active'));
@@ -1708,13 +2567,14 @@
 			};
 		});
 
-		// Settings-Modal schließen bei Klick auf Hintergrund
+		// Settings-Modal schließen -> bei Klick auf Hintergrund
 		document.getElementById('settingsModal').addEventListener('click', e => {
 			if (e.target === document.getElementById('settingsModal')) {
 				document.getElementById('settingsModal').classList.remove('active');
 			}
 		});
-		// Login Fenster sobald die Seite angezeigt wird
+
+		// Login Fenster -> sobald die Seite angezeigt wird
 		document.getElementById('mainLoginForm').onsubmit = async e => {
 			e.preventDefault();
 			const success = await authenticate(document.getElementById('authUsername').value, document.getElementById('authPassword').value);
@@ -1746,9 +2606,14 @@
 			btn.onclick = () => {
 				document.querySelectorAll('.tab-btn, .tab-content').forEach(el => el.classList.remove('active'));
 				btn.classList.add('active');
-				document.getElementById(btn.dataset.tab).classList.add('active');
+				if (btn.dataset.tab && document.getElementById(btn.dataset.tab)) {
+					document.getElementById(btn.dataset.tab).classList.add('active');
+				}
 				if (state.tournament && (btn.dataset.tab.includes('Bracket'))) {
 					renderBracket('winnerBracket'); renderBracket('loserBracket');
+				}
+				if (state.tournament && btn.dataset.tab === 'groupsSection') {
+					renderGroups();
 				}
 			};
 		});
@@ -1756,12 +2621,13 @@
 		// Event listener für Buttons
 		document.getElementById('participantsBtn').onclick = () => { loadParticipants(); document.getElementById('participantsModal').classList.add('active'); };
 		document.getElementById('userMgmtBtn').onclick = () => {
+			if (!requireAdmin()) return;
 			document.getElementById('userSearchBar').value = '';
 			loadUsers();
 			document.getElementById('userModal').classList.add('active');
 		};
 
-		// User Erstellung (nur für Admins)
+		// User Erstellung 
 		document.getElementById('userSearchBar').oninput = e => loadUsers(e.target.value);
 		document.getElementById('createUserBtn').onclick = async () => {
 			if (!requireAdmin()) return;
@@ -1788,10 +2654,14 @@
 		document.getElementById('closeUserModal').onclick = () => document.getElementById('userModal').classList.remove('active');
 		document.getElementById('closeParticipants').onclick = () => document.getElementById('participantsModal').classList.remove('active');
 		document.getElementById('closeImageModal').onclick = () => document.getElementById('imageModal').classList.remove('active');
+		document.getElementById('closeGroupDetailsModal').onclick = () => {
+			state.currentGroupIndex = null;
+			document.getElementById('groupDetailsModal').classList.remove('active');
+		};
 		document.getElementById('saveMatchBtn').onclick = handleResult;
 		document.getElementById('closeModal').onclick = () => document.getElementById('matchModal').classList.remove('active');
 
-		// Logout Logik (direkt ausloggen, kein separater Admin-Modus mehr)
+		// Logout Logik
 		document.getElementById('adminLogoutBtn').onclick = () => {
 			showCustomDialog({
 				title: "Abmelden",
@@ -1822,7 +2692,7 @@
 			});
 		};
 
-		// Spieler Eingabefelder dynamisch hinzufügen
+		// Spieler Eingabefelder 
 		const addP = () => {
 			const container = document.getElementById('playerInputs');
 			const count = container.children.length;
@@ -1872,15 +2742,45 @@
 				for (let i = 0; i < 4; i++) addP();
 			});
 		};
+		// Easter Egg: 3 Klicks auf den Pokal generiert 32 Spieler
+		let trophyClicks = 0;
+		let trophyTimer = null;
+		const setupTrophy = document.getElementById('setupTrophy');
+		if (setupTrophy) {
+			setupTrophy.onclick = () => {
+				trophyClicks++;
+				if (trophyTimer) clearTimeout(trophyTimer);
+				trophyTimer = setTimeout(() => { trophyClicks = 0; }, 2000);
+
+				if (trophyClicks >= 3) {
+					trophyClicks = 0;
+					const container = document.getElementById('playerInputs');
+					container.innerHTML = '';
+					for (let i = 1; i <= 32; i++) {
+						addP();
+						const inputs = container.querySelectorAll('.player-in');
+						const lastInp = inputs[inputs.length - 1];
+						if (lastInp) lastInp.value = `Spieler ${i}`;
+					}
+					showToast("Developer Test Modus aktiviert", "success");
+				}
+			};
+		}
+
 		document.getElementById('addPlayerBtn').onclick = addP;
 		document.getElementById('setupForm').onsubmit = async e => {
 			e.preventDefault();
-			// Schutz vor F12 Manipulation beim Absenden
 			if (!requireAdmin()) return;
 
 			let p = Array.from(document.querySelectorAll('.player-in')).map(i => i.value.trim() || 'FREILOS');
+			const hasGroups = document.getElementById('hasGroupsToggle')?.checked || false;
 
-			state.tournament = new TournamentManager(document.getElementById('tournamentName').value, p, document.getElementById('shuffleToggle').checked);
+			state.tournament = new TournamentManager(
+				document.getElementById('tournamentName').value,
+				p,
+				document.getElementById('shuffleToggle').checked,
+				hasGroups
+			);
 			await saveToCloud();
 			document.getElementById('setupSection').classList.remove('active');
 		};
@@ -1957,14 +2857,13 @@
 
 		// Admin Controls
 		document.getElementById('createNewFormBtn').onclick = openFormBuilder;
-		document.getElementById('saveFormBtn').onclick = saveNewForm;
+		document.getElementById('saveFormBtn').onclick = submitFeedback;
 		document.getElementById('submitFeedbackBtn').onclick = submitFeedback;
 
-		// Globale Hilfsfunktion für den HTML-onclick
 		window.addQuestionToBuilder = addQuestionToBuilder;
 	}
 
-	// Lädt alle aktiven Formulare aus der DB
+	// Lädt alle aktiven Umfragen aus der DB
 	async function loadForms() {
 		const list = document.getElementById('feedbackFormsList');
 		const adminControls = document.getElementById('adminFeedbackControls');
@@ -1982,7 +2881,7 @@
 			state.activeForms = [];
 			snap.forEach(doc => {
 				const data = doc.data();
-				if (data.active !== false || state.isAdmin) { // Admin sieht auch inaktive
+				if (data.active !== false || state.isAdmin) { // Auch inaktive Umfragen anzeigen -> für Admins
 					state.activeForms.push({ id: doc.id, ...data });
 				}
 			});
@@ -2010,7 +2909,7 @@
 		state.activeForms.forEach(form => {
 			const div = document.createElement('div');
 			div.className = 'participant-item';
-			// Normale Nutzer sehen die Umfrage nur, wenn sie aktiv ist.
+			// Nutzer sehen die Umfrage nur, wenn sie aktiv ist.
 			if (!state.isAdmin && form.active === false) return;
 
 			div.innerHTML = `
@@ -2019,7 +2918,7 @@
                 <div style="font-size:0.8rem; color: var(--text-dim);">${form.description || ''}</div>
             </div>
         `;
-			// Prüft ob man ein Admin ist
+			// Admin prüfung
 			if (state.isAdmin) {
 				const controls = document.createElement('div');
 				controls.style.display = 'flex';
@@ -2096,7 +2995,7 @@
 		const formEl = document.createElement('form');
 		formEl.id = 'activeFeedbackForm';
 
-		// Fragen rendern (anzeigen)
+		// Fragen rendern
 		form.questions.forEach(q => {
 			const wrapper = document.createElement('div');
 			wrapper.className = 'form-group glass';
@@ -2144,7 +3043,7 @@
 					star.dataset.value = i;
 					star.onclick = () => {
 						input.value = i;
-						// Visuelles Update die Sterne 
+						// Visuelles Update der Sterne 
 						Array.from(ratingContainer.children).forEach(s => {
 							if (s.tagName === 'SPAN') s.textContent = s.dataset.value <= i ? '⭐' : '☆';
 						});
@@ -2208,7 +3107,7 @@
 		document.getElementById('feedbackFormModal').classList.add('active');
 	}
 
-	// Antworten absenden der Umfrage
+	// Antworten absenden
 	async function submitFeedback() {
 		const formEl = document.getElementById('activeFeedbackForm');
 		if (!formEl) return;
@@ -2234,14 +3133,14 @@
 			}
 		});
 
-		// Zusätzliche manuelle Validierung für Pflichtfelder
+		// Validierung für Pflichtfelder
 		let missingFields = [];
 		state.currentForm.questions.forEach(q => {
 			if (q.required) {
-				const hasValue = (q.type === 'checkbox') ? 
-					(answers[q.id] && answers[q.id].length > 0) : 
+				const hasValue = (q.type === 'checkbox') ?
+					(answers[q.id] && answers[q.id].length > 0) :
 					(answers[q.id] !== undefined && answers[q.id] !== "");
-				
+
 				if (!hasValue) {
 					missingFields.push(q.label);
 				}
@@ -2393,7 +3292,7 @@
 				questions
 			};
 
-			await setDoc(doc(window.db, CONFIG.FORMS_COL, formId), formData, { merge: true }); // Mergen um sicher zu sein
+			await setDoc(doc(window.db, CONFIG.FORMS_COL, formId), formData, { merge: true });
 
 			showToast(state.editingFormId ? "Formular aktualisiert!" : "Formular erstellt!", "success"); // Bestätigungs Benachrichtigung
 			document.getElementById('formBuilderModal').classList.remove('active');
@@ -2461,7 +3360,7 @@
 		// Fragen rekonstruiren
 		form.questions.forEach(q => {
 
-			// Benutzerdefiniertes hinzufügen, um die ID beizubehalten oder einfach hinzufügen und ausfüllen
+			// Benutzerdefiniertes hinzufügen
 			addQuestionToBuilder(q.type);
 			const lastDiv = document.getElementById('builderQuestionsContainer').lastElementChild;
 
@@ -2505,7 +3404,7 @@
 
 			const responses = [];
 			snap.forEach(d => responses.push(d.data()));
-			// Sortuereb nach dem Datum
+			// Sortiert nach dem Datum
 			responses.sort((a, b) => b.submittedAt - a.submittedAt);
 
 			renderResponseList(form, responses);
@@ -2703,7 +3602,7 @@
 	}
 
 	async function openRegistrationModal() {
-		// Sicherstellen, dass die Datenbank bereit ist
+		// Datenbank Check
 		if (!window.dbFunctions) {
 			showToast("Lade Datenbank... Bitte einen Moment Geduld.", "warning");
 			let checkCount = 0;
@@ -2761,7 +3660,7 @@
 
 			document.getElementById('regModalTitle').textContent = "📝 Turnieranmeldung";
 
-			// Deadline anzeigen, wenn vorhanden
+			// Deadline anzeigen (wenn vorhanden)
 			if (settings.deadline) {
 				const dateStr = new Date(settings.deadline).toLocaleString('de-DE');
 				document.getElementById('regDeadlineInfo').textContent = `Anmeldeschluss: ${dateStr}`;
@@ -2777,13 +3676,13 @@
 			const countEl = document.getElementById('regCountInfo');
 			countEl.textContent = `Angemeldet: ${currentCount} / ${maxDisplay}`;
 
-			// Farbe basierend auf Auslastung
+			// Farbe basierend auf Anzahl
 			if (currentCount >= maxParticipants) {
-				countEl.style.color = 'var(--danger)'; // Rot wenn voll
+				countEl.style.color = 'var(--danger)'; // Rot -> wenn voll
 			} else if (currentCount >= maxParticipants * 0.8) {
-				countEl.style.color = 'var(--warning)'; // Gelb wenn fast voll (80%+)
+				countEl.style.color = 'var(--warning)'; // Gelb -> wenn fast voll (80%+)
 			} else {
-				countEl.style.color = 'var(--success)'; // Grün wenn noch viele Plätze frei sind
+				countEl.style.color = 'var(--success)'; // Grün -> wenn noch viele Plätze frei sind
 			}
 
 			if (isClosed) {
@@ -2811,7 +3710,6 @@
 		}
 
 		try {
-			// Nochmals Checken vor dem Speichern (Concurrency)
 			const { doc, setDoc, getDoc, getDocs, collection } = window.dbFunctions;
 			const settingsSnap = await getDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
 			const settings = settingsSnap.exists() ? settingsSnap.data() : { active: false };
@@ -2912,7 +3810,6 @@
 				div.className = 'participant-item';
 
 				const nameDiv = document.createElement('div');
-				// Rückwärtskompatibel: alte Einträge haben noch firstName/lastName
 				const displayName = reg.nickname
 					? decryptName(reg.nickname)
 					: `${decryptName(reg.firstName)} ${decryptName(reg.lastName)}`;
@@ -2958,6 +3855,8 @@
 		document.getElementById('closeGamePlanningModal').onclick = () => document.getElementById('gamePlanningModal').classList.remove('active');
 		document.getElementById('openAddGameBtn').onclick = () => {
 			document.getElementById('addGameForm').reset();
+			const searchInput = document.getElementById('matchPickerSearch');
+			if (searchInput) searchInput.value = '';
 			document.getElementById('gameTitleInput').value = ""; // Reset hidden input
 			const display = document.getElementById('selectedMatchDisplay');
 			if (display) {
@@ -2973,11 +3872,18 @@
 
 		document.getElementById('addGameForm').onsubmit = savePlannedGame;
 
-		// Echtzeit validierung, um Überlapung direkt zu erkennen
+		// Echtzeit validierung
 		const inputs = ['gameDateInput', 'gameTimeInput', 'gameDurationInput'];
 		inputs.forEach(id => {
 			document.getElementById(id).addEventListener('input', validateGameForm);
 		});
+
+		const searchInput = document.getElementById('matchPickerSearch');
+		if (searchInput) {
+			searchInput.oninput = (e) => {
+				updateMatchPicker(e.target.value);
+			};
+		}
 
 		// Spielplanung initialisieren
 		const dateInput = document.getElementById('gameDateInput');
@@ -2991,7 +3897,7 @@
 			onSnapshot(collection(window.db, CONFIG.GAMES_COL), (snapshot) => {
 				state.plannedGames = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-				// Automatische Bereinigung: Spiele von vergangenen Tagen löschen
+				// Spiele von vergangenen Tagen löschen
 				const today = new Date().toISOString().split('T')[0];
 				const { doc, deleteDoc } = window.dbFunctions;
 				state.plannedGames.forEach(async (game) => {
@@ -3003,13 +3909,13 @@
 
 				renderCalendar();
 				showGamesForDate(state.selectedDate);
-				if (!isSavingGame) validateGameForm(); // Nur validieren, wenn nicht gerade gespeichert wird
+				if (!isSavingGame) validateGameForm(); // Nur validieren, wenn nicht gespeichert wird
 			});
 		}
 	}
 
 	// Auswahl der Matches
-	function updateMatchPicker() {
+	function updateMatchPicker(filterText = '') {
 		const container = document.getElementById('matchPickerContainer');
 		const hiddenInput = document.getElementById('gameTitleInput');
 		const display = document.getElementById('selectedMatchDisplay');
@@ -3031,7 +3937,18 @@
 			const isP2Real = p2 && !p2b && p2 !== 'TBD';
 
 			if (isP1Real && isP2Real) {
-				matches.push(`${p1} vs. ${p2}`);
+				if (m.type === 'group') {
+					let foundGroup = null;
+					if (m.groupIndex !== undefined && t.groups[m.groupIndex]) {
+						foundGroup = t.groups[m.groupIndex];
+					} else {
+						foundGroup = t.groups.find(g => g.matches && g.matches.some(match => match.id === m.id));
+					}
+					const groupTitle = foundGroup ? foundGroup.title : "Gruppenspiel";
+					matches.push(`${p1} vs. ${p2} (${groupTitle})`);
+				} else {
+					matches.push(`${p1} vs. ${p2}`);
+				}
 			}
 		};
 
@@ -3039,6 +3956,15 @@
 		t.winnerBracket.forEach(r => r.forEach(extractFromMatch));
 		t.loserBracket.forEach(r => r.forEach(extractFromMatch));
 		t.stepladder.forEach(extractFromMatch);
+
+		// Gruppenphase durchsuchen
+		if (t.groups && t.groups.length > 0) {
+			t.groups.forEach(g => {
+				if (g.matches) {
+					g.matches.forEach(extractFromMatch);
+				}
+			});
+		}
 
 		if (matches.length === 0) {
 			container.innerHTML = '<p style="text-align:center; color:var(--text-dim); padding:10px;">Keine offenen Spiele verfügbar.</p>';
@@ -3048,18 +3974,23 @@
 		// Doppelte Prüfung: Nur unique Einträge
 		const uniqueMatches = [...new Set(matches)].sort();
 
-		uniqueMatches.forEach(matchText => {
-			// Überspringen, wenn das Spiel bereits geplant wurde
-			const isAlreadyPlanned = state.plannedGames && state.plannedGames.some(g => g.title === matchText);
+		const filteredMatches = uniqueMatches.filter(m => m.toLowerCase().includes(filterText.toLowerCase()));
+
+		if (filteredMatches.length === 0) {
+			container.innerHTML = '<p style="text-align:center; color:var(--text-dim); padding:10px;">Keine passenden Spiele verfügbar.</p>';
+			return;
+		}
+
+		filteredMatches.forEach(matchText => {
+			// Bereits geplante spiele überspringen
+			const isAlreadyPlanned = state.plannedGames && state.plannedGames.some(g => g.title.startsWith(matchText));
 			if (isAlreadyPlanned) return;
 
 			const div = document.createElement('div');
 			div.className = 'match-picker-item';
 			div.textContent = matchText;
 			div.onclick = () => {
-				// Alle anderen deselektieren
 				container.querySelectorAll('.match-picker-item').forEach(el => el.classList.remove('selected'));
-				// Diesen selektieren
 				div.classList.add('selected');
 				// Wert speichern
 				hiddenInput.value = matchText;
@@ -3266,7 +4197,7 @@
             </div>
         `;
 
-			// Nur Admins dürfen Spiele löschen
+			// Geplante spiele löschen button
 			if (state.isAdmin) {
 				const delBtn = document.createElement('button');
 				delBtn.className = 'btn btn-danger small';
@@ -3315,7 +4246,7 @@
 			return;
 		}
 
-		// Doppelter Check fürs Überlapen
+		// Überlapungs check
 		const dummyGame = { id: 'temp', time, duration };
 		const dayGames = state.plannedGames.filter(g => g.date === date);
 		const hasOverlap = checkOverlapLogic(dummyGame, dayGames);
@@ -3326,7 +4257,6 @@
 			return;
 		}
 
-		// Warnung ausblenden, um Flackern zu vermeiden
 		const warning = document.getElementById('overlapWarning');
 		if (warning) warning.classList.add('hidden');
 
@@ -3356,7 +4286,7 @@
 		}
 	}
 
-	//Geplante Spiele löschen (nur Admins)
+	//Geplante Spiele löschen 
 	async function deletePlannedGame(id) {
 		if (!requireAdmin()) return;
 		showCustomDialog({

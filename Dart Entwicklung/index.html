@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Darts-Turnier Manager</title>
+    <title>AUCOTEC Darts</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" crossorigin="anonymous"
@@ -14,8 +14,8 @@
 <body>
     <div class="container hidden" id="mainAppContainer">
         <header class="main-header">
-            <h1>🎯 Darts-Turnier Manager <span class="version-tag" id="versionTag" style="cursor: pointer;"
-                    title="Was ist neu?">v5.0.0</span></h1>
+            <h1>🎯 AUCOTEC Darts <span class="version-tag" id="versionTag" style="cursor: pointer;"
+                    title="Was ist neu?">v5</span></h1>
             <p>Organisiert von Marcel & René</p>
         </header>
 
@@ -58,16 +58,24 @@
 
             <section id="setupSection" class="modal-overlay">
                 <div class="card glass modal-card setup-card">
-                    <h2 style="margin-bottom: 20px; text-align: center;">🏆 Turnier Einrichten</h2>
+                    <h2 style="margin-bottom: 20px; text-align: center; cursor: pointer;" id="setupTrophy">🏆 Turnier
+                        Einrichten</h2>
                     <form id="setupForm">
                         <div class="form-group">
                             <label class="form-label">Turnier Name</label>
                             <input type="text" id="tournamentName" class="form-input" placeholder="z.B. Vereins-Cup"
                                 required>
                         </div>
-                        <div class="shuffle-container" style="margin: 15px 0;">
-                            <input type="checkbox" id="shuffleToggle">
-                            <label for="shuffleToggle">Spieler zufällig auslosen</label>
+                        <div class="shuffle-container"
+                            style="margin: 15px 0; display: flex; flex-direction: column; gap: 8px;">
+                            <div>
+                                <input type="checkbox" id="shuffleToggle">
+                                <label for="shuffleToggle">Spieler zufällig auslosen</label>
+                            </div>
+                            <div>
+                                <input type="checkbox" id="hasGroupsToggle">
+                                <label for="hasGroupsToggle">👥 Gruppenphase aktivieren</label>
+                            </div>
                         </div>
                         <div id="playerInputs" class="player-list-container"
                             style="max-height: 300px; overflow-y: auto; margin-bottom: 15px;"></div>
@@ -88,6 +96,7 @@
             <section id="tournamentSection" class="hidden">
                 <nav class="tab-nav">
                     <button class="tab-btn active" data-tab="homeSection">Home</button>
+                    <button class="tab-btn" data-tab="groupsSection">👥 Gruppen</button>
                     <button class="tab-btn" data-tab="winnerBracket">Winner Bracket</button>
                     <button class="tab-btn" data-tab="loserBracket">Second Chance</button>
                     <button class="tab-btn highlight" data-tab="stepladderBracket">🏆 Stepladder Finale</button>
@@ -161,19 +170,22 @@
                         </div>
                     </div>
                 </div>
-    </div>
 
-    <div id="winnerBracket" class="tab-content">
-        <div class="bracket-scroll"></div>
-    </div>
-    <div id="loserBracket" class="tab-content">
-        <div class="bracket-scroll"></div>
-    </div>
-    <div id="stepladderBracket" class="tab-content">
-        <div class="bracket-scroll"></div>
-    </div>
-    </section>
-    </main>
+                <div id="groupsSection" class="tab-content">
+                    <div id="groupsContainer" class="groups-grid"></div>
+                </div>
+
+                <div id="winnerBracket" class="tab-content">
+                    <div class="bracket-scroll"></div>
+                </div>
+                <div id="loserBracket" class="tab-content">
+                    <div class="bracket-scroll"></div>
+                </div>
+                <div id="stepladderBracket" class="tab-content">
+                    <div class="bracket-scroll"></div>
+                </div>
+            </section>
+        </main>
     </div>
 
     <div id="fullPageLogin" class="full-page-overlay">
@@ -200,7 +212,7 @@
         </div>
     </div>
 
-    <div id="matchModal" class="modal-overlay">
+    <div id="matchModal" class="modal-overlay" style="z-index: 2000;">
         <div class="card glass modal-card">
             <h3>Ergebnis eintragen</h3>
             <div id="matchModalContent"></div>
@@ -290,16 +302,30 @@
                 <div class="news-item system" style="margin-bottom: 20px;">
                     <div class="news-header">
                         <div class="news-title-group">
-                            <h4 class="news-title">Version 5.0.0 - Funktions Update</h4>
-                            <span class="news-date">10.06.2026</span>
+                            <h4 class="news-title">Version 5 - Funktions Update</h4>
+                            <span class="news-date">12.08.2026</span>
                         </div>
                     </div>
                     <div class="news-content">
-                        <div class="feature-block">
-                            <h5> ⚙️ Neuigkeiten</h5>
+
+                        <div class="feature-block highlight">
+                            <h5> 👥 Gruppenphase hinzugefügt</h5>
                             <ul>
-                                <li>Es können jetzt Einstellungen vorgenommen werden</li>
-                                <li>Ein Modernes Design wurde hinzugefügt</li>
+                                <li>Die Gruppenphase kann optional aktiviert werden</li>
+                                <li>Spieler werden automatisch in Gruppen eingeteilt</li>
+                                <li>Automatisches Punkte System hinzugefügt</li>
+                            </ul>
+                        </div>
+
+                        <div class="feature-block">
+                            <h5> ⚙️ Einstellungen hinzugefügt</h5>
+                            <ul>
+                                <li>Darstellungs Option</li>
+                                <li>Akzentfarben Option</li>
+                                <li>Kompakt Modus Option</li>
+                                <li>Verbindungslinien Option</li>
+                                <li>News Autorefresh Option</li>
+                                <li>Kachel Beschriftung Option</li>
                             </ul>
                         </div>
                         <div class="feature-block">
@@ -307,13 +333,14 @@
                             <ul>
                                 <li>Der Admin Login Button wurde entfernt</li>
                                 <li>Im Anmelde Fenster ist nur noch der Kürzel erforderlich</li>
+                                <li>Es ist nun möglich in der Spielplanung nach Paarungen zu suchen</li>
                             </ul>
                         </div>
-                        <div class="feature-block highlight">
+                        <div class="feature-block">
                             <h5>🔧 Fehlerbehebungen</h5>
                             <ul>
-                                <li>Es ist nicht mehr möglich die Erste Frage nicht auszufüllen, wenn diese ein
-                                    Pflichtfeld ist</li>
+                                <li>Die erste Frage kann nicht mehr übersprungen werden</li>
+                                <li>Die Linien Generierung wurde korrigiert </li>
                             </ul>
                         </div>
                     </div>
@@ -442,6 +469,60 @@
         </div>
     </div>
 
+    <!-- GROUP DETAILS MODAL -->
+    <div id="groupDetailsModal" class="modal-overlay">
+        <div class="card glass modal-card"
+            style="width: 900px; max-width: 95vw; max-height: 90vh; display: flex; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 id="groupDetailsTitle" style="margin: 0; text-transform: uppercase;">GRUPPENPHASE - GRUPPE A</h2>
+                <button id="closeGroupDetailsModal" class="btn btn-outline small">X</button>
+            </div>
+
+            <div class="group-details-layout" style="display: flex; gap: 30px; flex: 1; overflow: hidden;">
+                <!-- Left: Matches -->
+                <div class="group-matches-col"
+                    style="flex: 2; display: flex; flex-direction: column; overflow-y: auto; padding-right: 10px;">
+                    <div class="group-matches-header"
+                        style="display: grid; grid-template-columns: 50px 1fr 30px 1fr 80px; gap: 10px; color: var(--text-dim); font-size: 0.9rem; margin-bottom: 15px; padding: 0 10px;">
+                        <div>Spiel</div>
+                        <div>Spieler 1</div>
+                        <div style="text-align: center;">vs</div>
+                        <div>Spieler 2</div>
+                        <div style="text-align: center;">Ergebnis</div>
+                    </div>
+                    <div id="groupMatchesList" style="display: flex; flex-direction: column; gap: 10px;">
+                        <!-- Matches will be generated here -->
+                    </div>
+                </div>
+
+                <!-- Right: Standings -->
+                <div class="group-standings-col"
+                    style="flex: 1; background: rgba(255,255,255,0.02); border-radius: 12px; padding: 15px;">
+                    <h3
+                        style="margin-top: 0; margin-bottom: 15px; font-size: 1rem; color: var(--text-dim); text-transform: uppercase;">
+                        Standing</h3>
+                    <table class="standing-table" style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr
+                                style="color: var(--text-dim); font-size: 0.8rem; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                                <th style="padding-bottom: 10px;">#</th>
+                                <th style="padding-bottom: 10px;">Spieler</th>
+                                <th style="padding-bottom: 10px; text-align: center;">G</th>
+                                <th style="padding-bottom: 10px; text-align: center;">W</th>
+                                <th style="padding-bottom: 10px; text-align: center;">L</th>
+                                <th style="padding-bottom: 10px; text-align: center;">Pt</th>
+                                <th style="padding-bottom: 10px; text-align: center;">Legs</th>
+                            </tr>
+                        </thead>
+                        <tbody id="groupStandingsBody">
+                            <!-- Standings will be generated here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- REGISTRATION MANAGEMENT MODAL (ADMIN) -->
     <div id="adminRegistrationModal" class="modal-overlay">
         <div class="card glass modal-card" style="width: 800px; max-width: 95vw; max-height: 90vh; overflow-y: auto;">
@@ -502,7 +583,7 @@
             <div
                 style="display: flex; justify-content: space-between; align-items: center; padding: 20px; border-bottom: 1px solid var(--border);">
                 <h2 style="margin: 0;">📅 Spielplanung</h2>
-                <button id="closeGamePlanningModal" class="btn btn-outline small">Schließen</button>
+                <button id="closeGamePlanningModal" class="btn btn-outline small">X</button>
             </div>
 
             <div style="display: flex; flex: 1; overflow: hidden; height: 100%;">
@@ -593,6 +674,8 @@
                 <div class="form-group" style="margin-bottom: 10px;">
                     <label class="form-label" style="margin-bottom: 12px; display: block;">Paarung aus Turnier
                         wählen</label>
+                    <input type="text" id="matchPickerSearch" class="form-input" placeholder="🔍 Paarung filtern..."
+                        style="margin-bottom: 10px; border-radius: 8px;">
                     <div id="matchPickerContainer" class="participants-list-scroll"
                         style="height: 180px; border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: rgba(0,0,0,0.3); overflow-y: auto;">
                         <!-- Custom match buttons will be rendered here -->
@@ -621,130 +704,204 @@
     <!-- SETTINGS MODAL -->
     <div id="settingsModal" class="modal-overlay">
         <div class="card glass modal-card settings-modal-card">
+            <!-- Header -->
             <div class="settings-header">
                 <div class="settings-header-left">
                     <div class="settings-icon-wrapper">⚙️</div>
                     <div>
                         <h2 style="margin:0; font-size:1.3rem;">Einstellungen</h2>
-                        <p style="margin:0; font-size:0.75rem; color:var(--text-dim);">Die Einstellungen werden Lokal
-                            gespeichert</p>
+                        <p style="margin:0; font-size:0.75rem; color:var(--text-dim);">Die Speicherung ist lokal</p>
                     </div>
                 </div>
                 <button id="closeSettingsModal" class="btn btn-outline small">✕</button>
             </div>
 
-            <div class="settings-body">
+            <!-- Apple-style two-column layout -->
+            <div class="settings-layout">
 
-                <!-- TURNIERBAUM STIL -->
-                <div class="settings-section">
-                    <div class="settings-section-title">
-                        <span class="settings-section-icon">🌳</span>
-                        <span>Turnierbaum Darstellung</span>
-                    </div>
-                    <div class="settings-option-row">
-                        <div class="style-picker">
-                            <label class="style-option" id="styleClassicLabel">
-                                <input type="radio" name="bracketStyle" value="classic" id="styleClassic">
-                                <div class="style-preview classic-preview">
-                                    <div class="preview-match">
-                                        <div class="preview-player"></div>
-                                        <div class="preview-player"></div>
-                                    </div>
-                                    <div class="preview-line"></div>
-                                    <div class="preview-match">
-                                        <div class="preview-player"></div>
-                                        <div class="preview-player"></div>
-                                    </div>
+                <!-- SIDEBAR NAV -->
+                <nav class="settings-sidebar">
+                    <button class="settings-nav-item active" data-tab="allgemein">
+                        <span class="settings-nav-icon">⚙️</span>
+                        <span class="settings-nav-label">Allgemein</span>
+                        <span class="settings-nav-arrow">›</span>
+                    </button>
+                    <button class="settings-nav-item" data-tab="darstellung">
+                        <span class="settings-nav-icon">🎨</span>
+                        <span class="settings-nav-label">Darstellung</span>
+                        <span class="settings-nav-arrow">›</span>
+                    </button>
+
+                </nav>
+
+                <!-- CONTENT PANE -->
+                <div class="settings-content">
+
+                    <!-- TAB: DARSTELLUNG -->
+                    <div class="settings-tab-pane active" id="settingsTab-darstellung">
+                        <div class="settings-tab-title">Darstellung</div>
+
+                        <!-- TURNIERBAUM STIL -->
+                        <div class="settings-section">
+                            <div class="settings-section-title">
+                                <span class="settings-section-icon">🌳</span>
+                                <span>Turnierbaum Stil</span>
+                            </div>
+                            <div class="settings-option-row">
+                                <div class="style-picker">
+                                    <label class="style-option" id="styleClassicLabel">
+                                        <input type="radio" name="bracketStyle" value="classic" id="styleClassic">
+                                        <div class="style-preview classic-preview">
+                                            <div class="preview-match">
+                                                <div class="preview-player"></div>
+                                                <div class="preview-player"></div>
+                                            </div>
+                                            <div class="preview-line"></div>
+                                            <div class="preview-match">
+                                                <div class="preview-player"></div>
+                                                <div class="preview-player"></div>
+                                            </div>
+                                        </div>
+                                        <span class="style-label">Klassisch</span>
+                                    </label>
+                                    <label class="style-option" id="styleModernLabel">
+                                        <input type="radio" name="bracketStyle" value="modern" id="styleModern">
+                                        <div class="style-preview modern-preview">
+                                            <div class="preview-match modern">
+                                                <div class="preview-player modern"></div>
+                                                <div class="preview-player modern"></div>
+                                            </div>
+                                            <div class="preview-line modern"></div>
+                                            <div class="preview-match modern">
+                                                <div class="preview-player modern"></div>
+                                                <div class="preview-player modern"></div>
+                                            </div>
+                                        </div>
+                                        <span class="style-label">Modern</span>
+                                    </label>
                                 </div>
-                                <span class="style-label">Klassisch</span>
-                            </label>
-                            <label class="style-option" id="styleModernLabel">
-                                <input type="radio" name="bracketStyle" value="modern" id="styleModern">
-                                <div class="style-preview modern-preview">
-                                    <div class="preview-match modern">
-                                        <div class="preview-player modern"></div>
-                                        <div class="preview-player modern"></div>
-                                    </div>
-                                    <div class="preview-line modern"></div>
-                                    <div class="preview-match modern">
-                                        <div class="preview-player modern"></div>
-                                        <div class="preview-player modern"></div>
-                                    </div>
+                            </div>
+                        </div>
+
+                        <!-- AKZENTFARBE -->
+                        <div class="settings-section">
+                            <div class="settings-section-title">
+                                <span class="settings-section-icon">🎨</span>
+                                <span>Akzentfarbe</span>
+                            </div>
+                            <div class="settings-option-row">
+                                <div class="color-picker-row">
+                                    <button class="color-swatch" data-color="blue" style="background: #3b82f6;"
+                                        title="Blau (Standard)"></button>
+                                    <button class="color-swatch" data-color="purple" style="background: #8b5cf6;"
+                                        title="Lila"></button>
+                                    <button class="color-swatch" data-color="green" style="background: #10b981;"
+                                        title="Grün"></button>
+                                    <button class="color-swatch" data-color="orange" style="background: #f59e0b;"
+                                        title="Orange"></button>
+                                    <button class="color-swatch" data-color="pink" style="background: #ec4899;"
+                                        title="Pink"></button>
+                                    <button class="color-swatch" data-color="red" style="background: #ef4444;"
+                                        title="Rot"></button>
+                                    <button class="color-swatch" data-color="cyan" style="background: #06b6d4;"
+                                        title="Cyan"></button>
                                 </div>
-                                <span class="style-label">Modern</span>
-                            </label>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- AKZENTFARBE -->
-                <div class="settings-section">
-                    <div class="settings-section-title">
-                        <span class="settings-section-icon">🎨</span>
-                        <span>Akzentfarbe</span>
-                    </div>
-                    <div class="settings-option-row">
-                        <div class="color-picker-row">
-                            <button class="color-swatch" data-color="blue" style="background: #3b82f6;"
-                                title="Blau (Standard)"></button>
-                            <button class="color-swatch" data-color="purple" style="background: #8b5cf6;"
-                                title="Lila"></button>
-                            <button class="color-swatch" data-color="green" style="background: #10b981;"
-                                title="Grün"></button>
-                            <button class="color-swatch" data-color="orange" style="background: #f59e0b;"
-                                title="Orange"></button>
-                            <button class="color-swatch" data-color="pink" style="background: #ec4899;"
-                                title="Pink"></button>
-                            <button class="color-swatch" data-color="red" style="background: #ef4444;"
-                                title="Rot"></button>
-                            <button class="color-swatch" data-color="cyan" style="background: #06b6d4;"
-                                title="Cyan"></button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- TOGGLE EINSTELLUNGEN -->
-                <div class="settings-section">
-                    <div class="settings-toggle-list">
-                        <div class="settings-toggle-item">
-                            <div class="settings-toggle-info">
-                                <span class="settings-toggle-label">Kompakter Modus</span>
-                                <span class="settings-toggle-desc">Kleinere Match-Karten für mehr Übersicht</span>
                             </div>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="settingCompact">
-                                <span class="toggle-slider"></span>
-                            </label>
                         </div>
 
-                        <div class="settings-toggle-item">
-                            <div class="settings-toggle-info">
-                                <span class="settings-toggle-label">Verbindungslinien</span>
-                                <span class="settings-toggle-desc">SVG-Linien zwischen den Matches</span>
+                        <!-- TOGGLE EINSTELLUNGEN -->
+                        <div class="settings-section">
+                            <div class="settings-section-title">
+                                <span class="settings-section-icon">🔧</span>
+                                <span>Ansichts-Optionen</span>
                             </div>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="settingConnectors">
-                                <span class="toggle-slider"></span>
-                            </label>
-                        </div>
-
-                        <div class="settings-toggle-item">
-                            <div class="settings-toggle-info">
-                                <span class="settings-toggle-label">News Autorefresh</span>
-                                <span class="settings-toggle-desc">News-Feed alle 30 Sekunden neu laden</span>
+                            <div class="settings-toggle-list">
+                                <div class="settings-toggle-item">
+                                    <div class="settings-toggle-info">
+                                        <span class="settings-toggle-label">Kompakter Modus</span>
+                                        <span class="settings-toggle-desc">Kleinere Match-Karten für mehr
+                                            Übersicht</span>
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="settingCompact">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <div class="settings-toggle-item">
+                                    <div class="settings-toggle-info">
+                                        <span class="settings-toggle-label">Verbindungslinien</span>
+                                        <span class="settings-toggle-desc">SVG-Linien zwischen den Matches</span>
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="settingConnectors">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <div class="settings-toggle-item">
+                                    <div class="settings-toggle-info">
+                                        <span class="settings-toggle-label">Kachel-Beschriftung</span>
+                                        <span class="settings-toggle-desc">Text auf den Kacheln dauerhaft
+                                            anzeigen</span>
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="settingTileLabels">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
                             </div>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="settingNewsRefresh">
-                                <span class="toggle-slider"></span>
-                            </label>
                         </div>
                     </div>
+
+                    <!-- TAB: ALLGEMEIN -->
+                    <div class="settings-tab-pane" id="settingsTab-allgemein">
+                        <div class="settings-tab-title">Allgemein</div>
+
+                        <div class="settings-section">
+                            <div class="settings-section-title">
+                                <span class="settings-section-icon">🔄</span>
+                                <span>Automatisierung</span>
+                            </div>
+                            <div class="settings-toggle-list">
+                                <div class="settings-toggle-item">
+                                    <div class="settings-toggle-info">
+                                        <span class="settings-toggle-label">News Autorefresh</span>
+                                        <span class="settings-toggle-desc">News-Feed alle 30 Sekunden neu laden</span>
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="settingNewsRefresh">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="settings-section">
+                            <div class="settings-section-title">
+                                <span class="settings-section-icon">🗑️</span>
+                                <span>Daten</span>
+                            </div>
+                            <div class="settings-toggle-list">
+                                <div class="settings-toggle-item">
+                                    <div class="settings-toggle-info">
+                                        <span class="settings-toggle-label">Einstellungen zurücksetzen</span>
+                                        <span class="settings-toggle-desc">Alle Einstellungen auf Standard
+                                            zurücksetzen</span>
+                                    </div>
+                                    <button id="resetSettingsBtn" class="btn btn-outline small">↺ Reset</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+
+
                 </div>
             </div>
 
+            <!-- Footer -->
             <div class="settings-footer">
-                <button id="resetSettingsBtn" class="btn btn-outline" style="flex:1;">↺ Zurücksetzen</button>
-                <button id="applySettingsBtn" class="btn btn-primary" style="flex:1;">✓ Übernehmen</button>
+                <button id="applySettingsBtn" class="btn btn-primary" style="flex:1;">✓ Übernehmen &amp;
+                    Schließen</button>
             </div>
         </div>
     </div>
