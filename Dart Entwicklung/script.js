@@ -2226,8 +2226,8 @@
 			state.archivedTournaments = archives;
 			list.innerHTML = '';
 
-			archives.forEach(archive => {
-				const date = new Date(archive.archivedAt).toLocaleString('de-DE', {
+			archives.forEach(archiveData => {
+				const date = new Date(archiveData.archivedAt).toLocaleString('de-DE', {
 					day: '2-digit',
 					month: '2-digit',
 					year: 'numeric',
@@ -2235,8 +2235,11 @@
 					minute: '2-digit'
 				});
 
-				// Berechne Top 3 (oder Gold/Bronze)
-				const podium = calculatePodium(archive);
+				// FIX: Daten aus der DB in ein sauberes Objekt mit echten Arrays umwandeln
+				const archiveObj = TournamentManager.fromJSON(archiveData);
+
+				// Berechne Top 3 (oder Gold/Bronze) basierend auf dem sauberen Objekt
+				const podium = calculatePodium(archiveObj);
 				let podiumHtml = '';
 				if (podium.isGroup) {
 					podiumHtml = `<span style="color:gold">🥇 Gold: ${podium.gold[0] || '-'}</span> | <span style="color:#cd7f32">🥇 Bronze: ${podium.bronze[0] || '-'}</span>`;
@@ -2251,7 +2254,7 @@
 				// Layouting
 				const infoDiv = document.createElement('div');
 				infoDiv.innerHTML = `
-				<b style="font-size: 1rem;">${archive.name}</b><br>
+				<b style="font-size: 1rem;">${archiveData.name}</b><br>
 				<small style="color:var(--text-dim)">📅 ${date}</small><br>
 				<small style="color:var(--primary)">${podiumHtml}</small>
 			`;
@@ -2269,7 +2272,7 @@
 					delBtn.title = 'Löschen';
 					delBtn.onclick = (e) => {
 						e.stopPropagation();
-						deleteArchivedTournament(archive.id);
+						deleteArchivedTournament(archiveData.id);
 					};
 					controlsDiv.appendChild(delBtn);
 				}
@@ -2283,7 +2286,8 @@
 				div.appendChild(infoDiv);
 				div.appendChild(controlsDiv);
 
-				div.onclick = () => viewArchivedTournament(archive);
+				// Weiterhin die originalen Archivdaten übergeben für die Detailansicht
+				div.onclick = () => viewArchivedTournament(archiveData);
 				list.appendChild(div);
 			});
 		} catch (e) {
