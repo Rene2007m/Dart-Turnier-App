@@ -805,9 +805,40 @@
 			if (state.tournament.tournamentOver) {
 				rankingSec.classList.remove('hidden');
 				const pod = calculatePodium(state.tournament);
-				document.getElementById('rank1').textContent = pod[0] || '-';
-				document.getElementById('rank2').textContent = pod[1] || '-';
-				document.getElementById('rank3').textContent = pod[2] || '-';
+				
+				if (pod.isGroup) {
+					// Dynamisches generieren der beiden Podeste
+					rankingSec.innerHTML = `
+						<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
+						<div style="display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;">
+							<div style="flex: 1; min-width: 300px;">
+								<h4 style="text-align: center; color: gold; margin-bottom: 10px;">🥇 Gold Runde</h4>
+								<div class="podium">
+									<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.gold[1]}</div></div>
+									<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.gold[0]}</div></div>
+									<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.gold[2]}</div></div>
+								</div>
+							</div>
+							<div style="flex: 1; min-width: 300px;">
+								<h4 style="text-align: center; color: #cd7f32; margin-bottom: 10px;">🥉 Bronze Runde</h4>
+								<div class="podium">
+									<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.bronze[1]}</div></div>
+									<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.bronze[0]}</div></div>
+									<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.bronze[2]}</div></div>
+								</div>
+							</div>
+						</div>
+					`;
+				} else {
+					rankingSec.innerHTML = `
+						<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
+						<div class="podium">
+							<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.single[1]}</div></div>
+							<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.single[0]}</div></div>
+							<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.single[2]}</div></div>
+						</div>
+					`;
+				}
 			} else {
 				rankingSec.classList.add('hidden');
 			}
@@ -889,47 +920,60 @@
 	// Berechnet Platz 1 bis 3 basierend auf dem Final-Status
 	function calculatePodium(t) {
 		if (t.hasGroups) {
-			let r1 = '-', r2 = '-', r3 = '-';
+			let g1 = '-', g2 = '-', g3 = '-';
+			let b1 = '-', b2 = '-', b3 = '-';
 			
+			// Gold Runde Podium
 			if (t.winnerBracket && t.winnerBracket.length > 0) {
 				const finalRound = t.winnerBracket[t.winnerBracket.length - 1];
-				const finalMatch = finalRound[0];
+				const finalMatch = finalRound.find(m => m.type === 'winner');
 				if (finalMatch && finalMatch.completed) {
-					r1 = finalMatch.winner;
-					r2 = finalMatch.loser;
+					g1 = finalMatch.winner;
+					g2 = finalMatch.loser;
+				}
+				const thirdMatch = finalRound.find(m => m.type === 'winner_3rd');
+				if (thirdMatch && thirdMatch.completed) {
+					g3 = thirdMatch.winner;
 				}
 			}
 			
+			// Bronze Runde Podium
 			if (t.loserBracket && t.loserBracket.length > 0) {
-				const bronzeFinalRound = t.loserBracket[t.loserBracket.length - 1];
-				const bronzeFinalMatch = bronzeFinalRound[0];
-				if (bronzeFinalMatch && bronzeFinalMatch.completed) {
-					r3 = bronzeFinalMatch.winner;
+				const finalRound = t.loserBracket[t.loserBracket.length - 1];
+				const finalMatch = finalRound.find(m => m.type === 'loser');
+				if (finalMatch && finalMatch.completed) {
+					b1 = finalMatch.winner;
+					b2 = finalMatch.loser;
+				}
+				const thirdMatch = finalRound.find(m => m.type === 'loser_3rd');
+				if (thirdMatch && thirdMatch.completed) {
+					b3 = thirdMatch.winner;
 				}
 			}
 			
-			return [r1, r2, r3];
+			return { isGroup: true, gold: [g1, g2, g3], bronze: [b1, b2, b3] };
 		}
 
+		// Stepladder (ohne Gruppen)
 		const s = t.stepladder;
-		let r1 = s[2].player2; // WB 1 Default
-		let r2 = s[1].player2; // WB 2 Default
-		let r3 = s[0].player2; // WB 3 Default
+		let r1 = s[2]?.player2 || '-'; // WB 1 Default
+		let r2 = s[1]?.player2 || '-'; // WB 2 Default
+		let r3 = s[0]?.player2 || '-'; // WB 3 Default
 
-		if (s[2].completed) {
+		if (s[2] && s[2].completed) {
 			r1 = s[2].winner;
 			r2 = s[2].loser;
 			r3 = s[1].loser;
-		} else if (s[1].completed) {
+		} else if (s[1] && s[1].completed) {
 			r1 = s[2].player2;
 			r2 = s[1].winner;
 			r3 = s[1].loser;
-		} else if (s[0].completed) {
+		} else if (s[0] && s[0].completed) {
 			r1 = s[2].player2;
 			r2 = s[1].player2;
 			r3 = s[0].winner;
 		}
-		return [r1, r2, r3];
+		return { isGroup: false, single: [r1, r2, r3] };
 	}
 
 	// Zeigt Text oder Bilder in einem Vollbild Fenster an
@@ -2024,7 +2068,29 @@
 
 			if (t.tournamentOver) {
 				const pod = calculatePodium(t);
-				await addSystemNews(`🎊 TURNIER BEENDET 🎊`, `👑 <b>1. Platz: ${pod[0]}</b><br>🥈 2. Platz: ${pod[1]}<br>🥉 3. Platz: ${pod[2]}<br><br>Herzlichen Glückwunsch an alle Teilnehmer!`, false);
+				let newsContent = "";
+				
+				if (pod.isGroup) {
+					newsContent = `
+						<div style="margin-bottom: 10px;">
+							<b style="color:gold; font-size: 1.1em;">🥇 Gold Runde</b><br>
+							👑 <b>1. Platz: ${pod.gold[0]}</b><br>
+							🥈 2. Platz: ${pod.gold[1]}<br>
+							🥉 3. Platz: ${pod.gold[2]}
+						</div>
+						<div>
+							<b style="color:#cd7f32; font-size: 1.1em;">🥉 Bronze Runde</b><br>
+							👑 <b>1. Platz: ${pod.bronze[0]}</b><br>
+							🥈 2. Platz: ${pod.bronze[1]}<br>
+							🥉 3. Platz: ${pod.bronze[2]}
+						</div>
+						<br>Herzlichen Glückwunsch an alle Teilnehmer!
+					`;
+				} else {
+					newsContent = `👑 <b>1. Platz: ${pod.single[0]}</b><br>🥈 2. Platz: ${pod.single[1]}<br>🥉 3. Platz: ${pod.single[2]}<br><br>Herzlichen Glückwunsch an alle Teilnehmer!`;
+				}
+				
+				await addSystemNews(`🎊 TURNIER BEENDET 🎊`, newsContent, false);
 
 				// Auto-Archivierung -> Turnier wird archivieren wenn es beendet ist
 				await saveToCloud(); // speichern
@@ -2169,8 +2235,14 @@
 					minute: '2-digit'
 				});
 
-				// Berechne Top 3
+				// Berechne Top 3 (oder Gold/Bronze)
 				const podium = calculatePodium(archive);
+				let podiumHtml = '';
+				if (podium.isGroup) {
+					podiumHtml = `<span style="color:gold">🥇 Gold: ${podium.gold[0] || '-'}</span> | <span style="color:#cd7f32">🥇 Bronze: ${podium.bronze[0] || '-'}</span>`;
+				} else {
+					podiumHtml = `🥇 ${podium.single[0] || '-'} | 🥈 ${podium.single[1] || '-'} | 🥉 ${podium.single[2] || '-'}`;
+				}
 
 				const div = document.createElement('div');
 				div.className = 'participant-item';
@@ -2181,7 +2253,7 @@
 				infoDiv.innerHTML = `
 				<b style="font-size: 1rem;">${archive.name}</b><br>
 				<small style="color:var(--text-dim)">📅 ${date}</small><br>
-				<small style="color:var(--primary)">🥇 ${podium[0] || '-'} | 🥈 ${podium[1] || '-'} | 🥉 ${podium[2] || '-'}</small>
+				<small style="color:var(--primary)">${podiumHtml}</small>
 			`;
 
 				const controlsDiv = document.createElement('div');
@@ -2238,23 +2310,39 @@
 			const podiumDiv = document.createElement('div');
 			podiumDiv.className = 'card glass ranking-card';
 			podiumDiv.style.marginBottom = '20px';
-			podiumDiv.innerHTML = `
-			<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
-			<div class="podium">
-				<div class="podium-item second">
-					<div class="rank">2</div>
-					<div class="player-name">${pod[1] || '-'}</div>
-				</div>
-				<div class="podium-item first">
-					<div class="rank">1</div>
-					<div class="player-name">${pod[0] || '-'}</div>
-				</div>
-				<div class="podium-item third">
-					<div class="rank">3</div>
-					<div class="player-name">${pod[2] || '-'}</div>
-				</div>
-			</div>
-		`;
+			
+			if (pod.isGroup) {
+				podiumDiv.innerHTML = `
+					<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
+					<div style="display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;">
+						<div style="flex: 1; min-width: 250px;">
+							<h4 style="text-align: center; color: gold; margin-bottom: 10px;">🥇 Gold Runde</h4>
+							<div class="podium">
+								<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.gold[1]}</div></div>
+								<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.gold[0]}</div></div>
+								<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.gold[2]}</div></div>
+							</div>
+						</div>
+						<div style="flex: 1; min-width: 250px;">
+							<h4 style="text-align: center; color: #cd7f32; margin-bottom: 10px;">🥉 Bronze Runde</h4>
+							<div class="podium">
+								<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.bronze[1]}</div></div>
+								<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.bronze[0]}</div></div>
+								<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.bronze[2]}</div></div>
+							</div>
+						</div>
+					</div>
+				`;
+			} else {
+				podiumDiv.innerHTML = `
+					<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
+					<div class="podium">
+						<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.single[1]}</div></div>
+						<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.single[0]}</div></div>
+						<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.single[2]}</div></div>
+					</div>
+				`;
+			}
 			content.appendChild(podiumDiv);
 		}
 
