@@ -490,7 +490,9 @@
 								}
 							}
 						} else if (this.players.length <= 4) {
-							if (!this.stepladder[0].player1) this.stepladder[0].player1 = m.loser; else this.stepladder[0].player2 = m.loser;
+							if (!this.hasGroups) {
+								if (!this.stepladder[0].player1) this.stepladder[0].player1 = m.loser; else this.stepladder[0].player2 = m.loser;
+							}
 						}
 					}
 
@@ -508,22 +510,26 @@
 					}
 					this.checkAllByeMatches();
 				} else {
-					this.stepladder[2].player2 = m.winner;
-					this.stepladder[1].player2 = m.loser;
-					// Falls der Herausforderer bereits in Match 1 (step1) verloren hat und das Turnier auf ihn wartete
-					if (this.stepladder[0].completed && this.stepladder[0].winner === this.stepladder[0].player2) {
-						// Wenn  Platz 1 und 2 feststehen wird das Turnier beendet 
-						if (this.stepladder[1].player2 && this.stepladder[2].player2) {
-							this.tournamentOver = true;
+					if (!this.hasGroups) {
+						this.stepladder[2].player2 = m.winner;
+						this.stepladder[1].player2 = m.loser;
+						// Falls der Herausforderer bereits in Match 1 (step1) verloren hat und das Turnier auf ihn wartete
+						if (this.stepladder[0].completed && this.stepladder[0].winner === this.stepladder[0].player2) {
+							// Wenn  Platz 1 und 2 feststehen wird das Turnier beendet 
+							if (this.stepladder[1].player2 && this.stepladder[2].player2) {
+								this.tournamentOver = true;
+							}
 						}
 					}
 				}
 			} else if (m.type === 'winner_3rd') {
-				this.stepladder[0].player2 = m.winner;
-				// Falls Match 1 bereits fertig ist und SC 1 verloren hat
-				if (this.stepladder[0].completed && this.stepladder[0].winner === this.stepladder[0].player2) {
-					if (this.stepladder[1].player2 && this.stepladder[2].player2) {
-						this.tournamentOver = true;
+				if (!this.hasGroups) {
+					this.stepladder[0].player2 = m.winner;
+					// Falls Match 1 bereits fertig ist und SC 1 verloren hat
+					if (this.stepladder[0].completed && this.stepladder[0].winner === this.stepladder[0].player2) {
+						if (this.stepladder[1].player2 && this.stepladder[2].player2) {
+							this.tournamentOver = true;
+						}
 					}
 				}
 			}
@@ -534,7 +540,11 @@
 					const isP1 = this.loserBracket[m.round].indexOf(m) % 2 === 0;
 					if (isP1) nextLR[idx].player1 = m.winner; else nextLR[idx].player2 = m.winner;
 					this.checkAllByeMatches();
-				} else this.stepladder[0].player1 = m.winner;
+				} else {
+					if (!this.hasGroups) {
+						this.stepladder[0].player1 = m.winner;
+					}
+				}
 			}
 		}
 
@@ -859,6 +869,29 @@
 
 	// Berechnet Platz 1 bis 3 basierend auf dem Final-Status
 	function calculatePodium(t) {
+		if (t.hasGroups) {
+			let r1 = '-', r2 = '-', r3 = '-';
+			
+			if (t.winnerBracket && t.winnerBracket.length > 0) {
+				const finalRound = t.winnerBracket[t.winnerBracket.length - 1];
+				const finalMatch = finalRound[0];
+				if (finalMatch && finalMatch.completed) {
+					r1 = finalMatch.winner;
+					r2 = finalMatch.loser;
+				}
+			}
+			
+			if (t.loserBracket && t.loserBracket.length > 0) {
+				const bronzeFinalRound = t.loserBracket[t.loserBracket.length - 1];
+				const bronzeFinalMatch = bronzeFinalRound[0];
+				if (bronzeFinalMatch && bronzeFinalMatch.completed) {
+					r3 = bronzeFinalMatch.winner;
+				}
+			}
+			
+			return [r1, r2, r3];
+		}
+
 		const s = t.stepladder;
 		let r1 = s[2].player2; // WB 1 Default
 		let r2 = s[1].player2; // WB 2 Default
@@ -1868,6 +1901,15 @@
 				}
 			}
 
+			if (t.hasGroups) {
+				const goldFinished = t.winnerBracket.length > 0 && t.winnerBracket.every(round => round.every(match => match.completed));
+				const bronzeFinished = t.loserBracket.length > 0 && t.loserBracket.every(round => round.every(match => match.completed));
+				
+				if (goldFinished && bronzeFinished) {
+					t.tournamentOver = true;
+				}
+			}
+
 			// News Feed Nachricht ertsllen
 			let matchTitle = m.title;
 			if (!matchTitle) {
@@ -2139,7 +2181,7 @@
 		${tournament.hasGroups ? '<button class="tab-btn" data-tab="archive-groups">👥 Gruppen</button>' : ''}
 		<button class="tab-btn" data-tab="archive-winner">Winner Bracket</button>
 		<button class="tab-btn" data-tab="archive-loser">Loser Bracket</button>
-		<button class="tab-btn" data-tab="archive-stepladder">🏆 Stepladder Finale</button>
+		${!tournament.hasGroups ? '<button class="tab-btn" data-tab="archive-stepladder">🏆 Stepladder Finale</button>' : ''}
 	`;
 		content.appendChild(tabNav);
 
