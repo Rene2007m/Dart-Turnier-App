@@ -2079,27 +2079,7 @@
 				let newsContent = "";
 				
 				if (pod.isGroup) {
-					newsContent = `
-						<div style="display: flex; gap: 20px; flex-wrap: wrap; margin-top: 10px; margin-bottom: 15px;">
-							<div style="flex: 1; min-width: 200px; background: rgba(255, 215, 0, 0.05); border: 1px solid rgba(255, 215, 0, 0.2); border-radius: 8px; padding: 12px;">
-								<b style="color: gold; font-size: 1.1em; display: block; margin-bottom: 8px; border-bottom: 1px solid rgba(255, 215, 0, 0.2); padding-bottom: 4px;">🥇 Gold Runde</b>
-								<div style="line-height: 1.6;">
-									👑 <b>1. Platz:</b> ${pod.gold[0]}<br>
-									🥈 <b>2. Platz:</b> ${pod.gold[1]}<br>
-									🥉 <b>3. Platz:</b> ${pod.gold[2]}
-								</div>
-							</div>
-							<div style="flex: 1; min-width: 200px; background: rgba(205, 127, 50, 0.05); border: 1px solid rgba(205, 127, 50, 0.2); border-radius: 8px; padding: 12px;">
-								<b style="color: #cd7f32; font-size: 1.1em; display: block; margin-bottom: 8px; border-bottom: 1px solid rgba(205, 127, 50, 0.2); padding-bottom: 4px;">🥉 Bronze Runde</b>
-								<div style="line-height: 1.6;">
-									👑 <b>1. Platz:</b> ${pod.bronze[0]}<br>
-									🥈 <b>2. Platz:</b> ${pod.bronze[1]}<br>
-									🥉 <b>3. Platz:</b> ${pod.bronze[2]}
-								</div>
-							</div>
-						</div>
-						<div style="text-align: center; font-weight: bold; color: var(--primary);">Herzlichen Glückwunsch an alle Teilnehmer! 🎉</div>
-					`;
+					newsContent = `🏅 <b>Gold Runde</b><br><br>👑 <b>1. Platz: ${pod.gold[0]}</b><br>🥈 2. Platz: ${pod.gold[1]}<br>🥉 3. Platz: ${pod.gold[2]}<br><br>🥉 <b>Bronze Runde</b><br><br>👑 <b>1. Platz: ${pod.bronze[0]}</b><br>🥈 2. Platz: ${pod.bronze[1]}<br>🥉 3. Platz: ${pod.bronze[2]}<br><br>Herzlichen Glückwunsch an alle Teilnehmer!`;
 				} else {
 					newsContent = `👑 <b>1. Platz: ${pod.single[0]}</b><br>🥈 2. Platz: ${pod.single[1]}<br>🥉 3. Platz: ${pod.single[2]}<br><br>Herzlichen Glückwunsch an alle Teilnehmer!`;
 				}
