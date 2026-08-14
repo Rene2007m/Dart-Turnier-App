@@ -13,12 +13,12 @@
 6. Auf **`🚀 Starten`** klicken.
 
 #### 2. Ergebnisse eintragen & Turnierfortschritt
-* **Gruppenphase / Bracket:** Klicke als Admin einfach auf ein beliebiges Match im Turnierbaum oder in der Gruppenansicht.
-* **Ergebnis eingeben:** Trage die Leg-Punkte der beiden Spieler ein und klicke auf **`💾 Speichern`**.
-* **Automatische Logik:** 
-  * Gewinner rücken automatisch in die nächste Runde vor.
-  * Verlierer im Winner Bracket werden automatisch ins Second Chance (Loser) Bracket verschoben.
-  * Sind alle Gruppenspiele beendet, werden die K.o.-Runden (Gold- & Bronze-Runde) automatisch generiert.
+- **Gruppenphase / Bracket:** Klicke als Admin einfach auf ein beliebiges Match im Turnierbaum oder in der Gruppenansicht.
+- **Ergebnis eingeben:** Trage die Leg-Punkte der beiden Spieler ein und klicke auf **`💾 Speichern`**.
+- **Automatische Logik:**
+  - Gewinner rücken automatisch in die nächste Runde vor.
+  - Verlierer im Winner Bracket werden automatisch ins Second Chance (Loser) Bracket verschoben.
+  - Sind alle Gruppenspiele beendet, werden die K.o.-Runden (Gold- & Bronze-Runde) automatisch generiert.
 
 #### 3. Spiele planen (Kalender)
 1. Klicke im Dashboard auf die Kachel **Spielplanung**.
@@ -46,7 +46,7 @@ Falls du den Code anpassen oder neue Funktionen einbauen möchtest, findest du h
 
 ### 🎨 Design & Farbschemas anpassen (`styles.css`)
 
-* **Hauptfarben ändern:**
+- **Hauptfarben ändern:**
   Die zentralen Farben der Anwendung sind ganz oben in der `styles.css` über CSS-Variablen definiert:
   ```css
   :root {
