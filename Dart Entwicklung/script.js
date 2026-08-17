@@ -772,7 +772,7 @@
 			}
 
 			if (lbTabBtn) {
-				lbTabBtn.textContent = hasGroups ? '🥉 Bronze Runde' : 'Second Chance';
+				lbTabBtn.textContent = hasGroups ? '🥈 Silber Runde' : 'Second Chance';
 				lbTabBtn.classList.toggle('hidden', !showBrackets);
 				if (!showBrackets && lbTabBtn.classList.contains('active')) {
 					lbTabBtn.classList.remove('active');
@@ -820,7 +820,7 @@
 								</div>
 							</div>
 							<div style="flex: 1; min-width: 300px;">
-								<h4 style="text-align: center; color: #cd7f32; margin-bottom: 10px;">🥉 Bronze Runde</h4>
+								<h4 style="text-align: center; color: #cd7f32; margin-bottom: 10px;">🥇 Silber Runde</h4>
 								<div class="podium">
 									<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.bronze[1]}</div></div>
 									<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.bronze[0]}</div></div>
@@ -1498,18 +1498,18 @@
 		state.tournament[type].forEach((round, rI) => {
 			const isFinalRound = rI === state.tournament[type].length - 1;
 			const col = document.createElement('div'); col.className = 'bracket-round';
-			col.innerHTML = `<div class="badge" style="margin-bottom:15px; text-align:center">${isFinalRound ? (type === 'winnerBracket' ? (state.tournament.hasGroups ? "Gold Finale" : "Finale & Platz 3") : (state.tournament.hasGroups ? "Bronze Finale" : "SC Finale")) : `Runde ${rI + 1}`}</div>`;
+			col.innerHTML = `<div class="badge" style="margin-bottom:15px; text-align:center">${isFinalRound ? (type === 'winnerBracket' ? (state.tournament.hasGroups ? "Gold Finale" : "Finale & Platz 3") : (state.tournament.hasGroups ? "Silber Finale" : "SC Finale")) : `Runde ${rI + 1}`}</div>`;
 			const matchesContainer = document.createElement('div'); matchesContainer.className = 'bracket-matches-container';
 			const matchElements = [];
 			round.forEach((m) => {
 				const groupDiv = document.createElement('div'); groupDiv.className = 'match-group';
 				let titleHtml = '';
 				if (type === 'winnerBracket') {
-					if (m.type === 'winner_3rd') titleHtml = `<div class="match-title bronze">🥉 Spiel um Platz 3</div>`;
+					if (m.type === 'winner_3rd') titleHtml = `<div class="match-title silber">🥉 Spiel um Platz 3</div>`;
 					else if (isFinalRound && m.type === 'winner') titleHtml = `<div class="match-title">🏆 Spiel um Platz 1</div>`;
 				} else if (type === 'loserBracket') {
-					if (m.type === 'loser_3rd') titleHtml = `<div class="match-title bronze">🥉 Spiel um Platz 3</div>`;
-					else if (isFinalRound && m.type === 'loser' && state.tournament.hasGroups) titleHtml = `<div class="match-title">🏆 Finale (Bronze)</div>`;
+					if (m.type === 'loser_3rd') titleHtml = `<div class="match-title silber">🥉 Spiel um Platz 3</div>`;
+					else if (isFinalRound && m.type === 'loser' && state.tournament.hasGroups) titleHtml = `<div class="match-title">🏆 Finale (Silber)</div>`;
 				}
 				const div = document.createElement('div');
 				const isP1B = TournamentManager.isBye(m.player1);
@@ -2049,11 +2049,11 @@
 				} else if (m.type === 'winner_3rd') {
 					matchTitle = t.hasGroups ? "🥉 Spiel um Platz 3 (Gold)" : "🥉 Spiel um Platz 3 (WB)";
 				} else if (m.type === 'loser_3rd') {
-					matchTitle = "🥉 Spiel um Platz 3 (Bronze)";
+					matchTitle = "🥉 Spiel um Platz 3 (Silber)";
 				} else if (m.type === 'loser') {
 					const isFinal = m.round === t.loserBracket.length - 1;
 					if (t.hasGroups) {
-						matchTitle = isFinal ? "🏆 Bronze Finale" : `Bronze Runde - Runde ${m.round + 1}`;
+						matchTitle = isFinal ? "🏆 Silber Finale" : `Silber Runde - Runde ${m.round + 1}`;
 					} else {
 						matchTitle = isFinal ? "🏆 Second Chance Finale" : `Second Chance - Runde ${m.round + 1}`;
 					}
@@ -2079,7 +2079,7 @@
 				let newsContent = "";
 				
 				if (pod.isGroup) {
-					newsContent = `🏅 <b>Gold Runde</b><br><br>👑 <b>1. Platz: ${pod.gold[0]}</b><br>🥈 2. Platz: ${pod.gold[1]}<br>🥉 3. Platz: ${pod.gold[2]}<br><br>🥉 <b>Bronze Runde</b><br><br>👑 <b>1. Platz: ${pod.bronze[0]}</b><br>🥈 2. Platz: ${pod.bronze[1]}<br>🥉 3. Platz: ${pod.bronze[2]}<br><br>Herzlichen Glückwunsch an alle Teilnehmer!`;
+					newsContent = `🏅 <b>Gold Runde</b><br><br>👑 <b>1. Platz: ${pod.gold[0]}</b><br>🥈 2. Platz: ${pod.gold[1]}<br>🥉 3. Platz: ${pod.gold[2]}<br><br>🥈 <b>Silber Runde</b><br><br>👑 <b>1. Platz: ${pod.bronze[0]}</b><br>🥈 2. Platz: ${pod.bronze[1]}<br>🥉 3. Platz: ${pod.bronze[2]}<br><br>Herzlichen Glückwunsch an alle Teilnehmer!`;
 				} else {
 					newsContent = `👑 <b>1. Platz: ${pod.single[0]}</b><br>🥈 2. Platz: ${pod.single[1]}<br>🥉 3. Platz: ${pod.single[2]}<br><br>Herzlichen Glückwunsch an alle Teilnehmer!`;
 				}
@@ -2236,7 +2236,7 @@
 				const podium = calculatePodium(archiveObj);
 				let podiumHtml = '';
 				if (podium.isGroup) {
-					podiumHtml = `<span style="color:gold">🥇 Gold: ${podium.gold[0] || '-'}</span> | <span style="color:#cd7f32">🥇 Bronze: ${podium.bronze[0] || '-'}</span>`;
+					podiumHtml = `<span style="color:gold">🥇 Gold: ${podium.gold[0] || '-'}</span> | <span style="color:#cd7f32">🥇 Silber: ${podium.bronze[0] || '-'}</span>`;
 				} else {
 					podiumHtml = `🥇 ${podium.single[0] || '-'} | 🥈 ${podium.single[1] || '-'} | 🥉 ${podium.single[2] || '-'}`;
 				}
@@ -2322,7 +2322,7 @@
 							</div>
 						</div>
 						<div style="flex: 1; min-width: 250px;">
-							<h4 style="text-align: center; color: #cd7f32; margin-bottom: 10px;">🥉 Bronze Runde</h4>
+							<h4 style="text-align: center; color: #cd7f32; margin-bottom: 10px;">🥉 Silber Runde</h4>
 							<div class="podium">
 								<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.bronze[1]}</div></div>
 								<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.bronze[0]}</div></div>
@@ -2471,7 +2471,7 @@
 			const isFinalRound = rI === tournament[type].length - 1;
 			const col = document.createElement('div');
 			col.className = 'bracket-round';
-			col.innerHTML = `<div class="badge" style="margin-bottom:15px; text-align:center">${isFinalRound ? (type === 'winnerBracket' ? (tournament.hasGroups ? "Gold Finale" : "Finale & Platz 3") : (tournament.hasGroups ? "Bronze Finale" : "LB Finale")) : `Runde ${rI + 1}`}</div>`;
+			col.innerHTML = `<div class="badge" style="margin-bottom:15px; text-align:center">${isFinalRound ? (type === 'winnerBracket' ? (tournament.hasGroups ? "Gold Finale" : "Finale & Platz 3") : (tournament.hasGroups ? "Silber Finale" : "LB Finale")) : `Runde ${rI + 1}`}</div>`;
 
 			const matchesContainer = document.createElement('div');
 			matchesContainer.className = 'bracket-matches-container';
