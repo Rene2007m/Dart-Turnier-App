@@ -1,4 +1,76 @@
 (function () {
+	const db = "proxy_db";
+
+	const getAuthHeader = () => {
+		if (!state.currentUser || !state.currentUser.hash) return {};
+		return { 'Authorization': `${state.currentUser.username}:${state.currentUser.hash}` };
+	};
+
+	const dbFunctions = {
+		doc: (db, col, id) => {
+			if (typeof col === 'object') return { path: col.path + '/' + id };
+			if (id) return { path: col + '/' + id };
+			return { path: col };
+		},
+		collection: (db, col) => ({ path: col }),
+		query: (colRef, ...conditions) => ({ path: colRef.path, conditions }),
+		where: (field, op, value) => ({ field, op, value }),
+		getDoc: async (ref) => {
+			try {
+				const res = await fetch(`/.netlify/functions/api-proxy?action=getDoc&path=${encodeURIComponent(ref.path)}`, {
+					headers: getAuthHeader()
+				});
+				const json = await res.json();
+				return { exists: () => json.exists, id: json.id, data: () => json.data };
+			} catch(e) { console.error("API-Proxy getDoc Fehler:", e); return { exists: () => false, data: () => ({}) }; }
+		},
+		getDocs: async (ref) => {
+			try {
+				let url = `/.netlify/functions/api-proxy?action=getDocs&path=${encodeURIComponent(ref.path)}`;
+				if (ref.conditions) url += `&conditions=${encodeURIComponent(JSON.stringify(ref.conditions))}`;
+				const res = await fetch(url, { 
+					headers: getAuthHeader()
+				});
+				const json = await res.json();
+				return {
+					empty: json.empty,
+					docs: json.docs.map(d => ({ id: d.id, data: () => d.data })),
+					forEach: function(cb) { this.docs.forEach(cb); }
+				};
+			} catch(e) { console.error("API-Proxy getDocs Fehler:", e); return { empty: true, docs: [], forEach: () => {} }; }
+		},
+		setDoc: async (ref, data, options) => {
+			const res = await fetch(`/.netlify/functions/api-proxy?action=setDoc&path=${encodeURIComponent(ref.path)}`, {
+				method: 'POST', headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+				body: JSON.stringify({ data, options })
+			});
+			if (!res.ok) throw new Error("Keine Berechtigung");
+		},
+		updateDoc: async (ref, data) => {
+			const res = await fetch(`/.netlify/functions/api-proxy?action=updateDoc&path=${encodeURIComponent(ref.path)}`, {
+				method: 'POST', headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+				body: JSON.stringify({ data })
+			});
+			if (!res.ok) throw new Error("Keine Berechtigung");
+		},
+		deleteDoc: async (ref) => {
+			const res = await fetch(`/.netlify/functions/api-proxy?action=deleteDoc&path=${encodeURIComponent(ref.path)}`, {
+				method: 'POST', headers: getAuthHeader()
+			});
+			if (!res.ok) throw new Error("Keine Berechtigung");
+		},
+		onSnapshot: (ref, callback) => {
+			const isDoc = ref.path.includes('/');
+			const fetchFn = isDoc ? dbFunctions.getDoc : dbFunctions.getDocs;
+			
+			fetchFn(ref).then(callback);
+			setInterval(() => {
+				fetchFn(ref).then(callback);
+			}, 10000);
+		}
+	};
+	// ----------------------------------------
+
 	/**
 	 * ============================================================
 	 * 1. KONFIGURATION & GLOBALE VARIABLEN
@@ -38,6 +110,7 @@
 	};
 
 	let isSavingGame = false;
+	let lastTournamentHash = null;
 
 	/**
 	 * ============================================================
@@ -45,7 +118,7 @@
 	 * ============================================================
 	 */
 
-	// Prüft ob der aktuelle User Admin-Rechte hatE
+	// Prüft ob der aktuelle User Admin-Rechte hat
 	function requireAdmin() {
 		if (!state.isAdmin) {
 			showToast("Zugriff verweigert: Admin-Rechte erforderlich!", "danger");
@@ -252,10 +325,8 @@
 
 			const goldMatches = [];
 			for (let i = 0; i < rank1Players.length; i++) {
-				// Pair rank1 with rank2
 				const p1 = rank1Players[i];
 				const p2 = rank2Players[i] || 'FREILOS';
-				// Zufällige Seitenverteilung (wer Spieler 1 / Spieler 2 ist)
 				if (Math.random() < 0.5) {
 					goldMatches.push({ p1, p2 });
 				} else {
@@ -269,7 +340,6 @@
 			goldMatches.forEach(m => {
 				goldRound1.push(this.createMatch(0, m.p1, m.p2, 'winner'));
 			});
-			// Falls auffüllen nötig für Zweierpotenz
 			const targetGold = Math.pow(2, Math.ceil(Math.log2(goldRound1.length || 1)));
 			while (goldRound1.length < targetGold) {
 				goldRound1.push(this.createMatch(0, 'FREILOS', 'FREILOS', 'winner'));
@@ -325,9 +395,7 @@
 				while (res.length < target) res.push('FREILOS');
 				return res;
 			}
-			// Zufälliges Mischen der Spieler
 			let realPlayers = players.filter(p => p.trim() && !TournamentManager.isBye(p));
-			// Mischt nur die echten Spieler (keine Freilose)
 			for (let i = realPlayers.length - 1; i > 0; i--) {
 				const j = Math.floor(Math.random() * (i + 1));
 				[realPlayers[i], realPlayers[j]] = [realPlayers[j], realPlayers[i]];
@@ -340,17 +408,14 @@
 				while (res.length < T) res.push('FREILOS');
 				return res;
 			}
-			// Logik um Freilose fair in der ersten Runde aufzuteilen
 			const T = Math.pow(2, Math.ceil(Math.log2(N)));
-			const M = N - T / 2; // Real matches in WB Round 1
+			const M = N - T / 2;
 
 			const groupA = realPlayers.slice(0, 2 * M);
 			const groupB = realPlayers.slice(2 * M);
 
 			const result = [];
-			// Gruppe A: Real vs Real. Verlierer kommen in das LB und die Gewinner gehen eins weiter
 			for (let i = 0; i < groupA.length; i++) result.push(groupA[i]);
-			// Gruppe B: Real vs FREILOS. Die Spieler mit einen Freilos gehen automatisch weiter und kein Spieler geht in das LB
 			for (let i = 0; i < groupB.length; i++) {
 				result.push(groupB[i]);
 				result.push('FREILOS');
@@ -359,9 +424,9 @@
 			while (result.length < T) result.push('FREILOS');
 			return result;
 		}
+
 		// Erstellt die Grundstruktur der Brackets (Runde1 bis Finale)
 		initializeBrackets() {
-			// Winner Bracket Runde 1 füllen
 			const firstRound = [];
 			const wbSlots = this.hasGroups ? Math.ceil(this.players.length / 2) : this.players.length;
 			for (let i = 0; i < wbSlots; i += 2) {
@@ -372,23 +437,19 @@
 			this.winnerBracket.push(firstRound);
 			this.createWBRounds();
 
-			// Loser bracket Logik
 			let catA = [];
 			firstRound.forEach((m, i) => {
 				const p1b = TournamentManager.isBye(m.player1);
 				const p2b = TournamentManager.isBye(m.player2);
-				if (!p1b && !p2b) catA.push(i); // Nur Matches zwischen echten Spielern
+				if (!p1b && !p2b) catA.push(i);
 			});
 
-			// Optimierte LB-Größe: Nur so viele Plätze wie echte Verlierer nötig sind (Kategorie A)
 			const numRealLosers = this.hasGroups ? Math.floor(this.players.length / 2) : catA.length;
 			this.wbToLbMap = {};
 			if (this.players.length > 4 && numRealLosers > 0) {
-				// Kleinste Zweierpotenz um numRealLosers unterzubringen
 				const lbSize = Math.max(1, Math.pow(2, Math.ceil(Math.log2(numRealLosers || 2)) - 1));
 				const numByes = (lbSize * 2) - numRealLosers;
 
-				// Zufällige Auswahl der Matches, die ein Freilos erhalten
 				const matchIndices = Array.from({ length: lbSize }, (_, i) => i);
 				for (let i = matchIndices.length - 1; i > 0; i--) {
 					const j = Math.floor(Math.random() * (i + 1));
@@ -402,22 +463,18 @@
 					const hasBye = selectedByeIndices.has(i);
 					lbRound0.push(this.createMatch(0, null, hasBye ? 'FREILOS' : null, 'loser'));
 
-					// P1 ist immer für einen echten Verlierer verfügbar
 					availableSlots.push({ lbIdx: i, isP1: true });
-					// P2 ist nur verfügbar, wenn kein Freilos gesetzt wurde
 					if (!hasBye) {
 						availableSlots.push({ lbIdx: i, isP1: false });
 					}
 				}
 				this.loserBracket = [lbRound0];
 
-				// Zufälliges Mischen der verfügbaren Plätze für die WB-Verlierer
 				for (let i = availableSlots.length - 1; i > 0; i--) {
 					const j = Math.floor(Math.random() * (i + 1));
 					[availableSlots[i], availableSlots[j]] = [availableSlots[j], availableSlots[i]];
 				}
 
-				// Mapping der Verlierer auf zufälligen Plätze (Freilose werde ignoriert)
 				const wbIndices = this.hasGroups ? [] : catA;
 				wbIndices.forEach((wbIdx, slotIdx) => {
 					if (availableSlots[slotIdx]) {
@@ -430,7 +487,6 @@
 				this.loserBracket = [];
 			}
 
-			// Stepladder-Finale (Top3)
 			this.stepladder = [
 				{ id: 'step1', title: "Match 1: WB 3 vs SC 1", player1: null, player2: null, score1: 0, score2: 0, completed: false, type: 'stepladder' },
 				{ id: 'step2', title: "Match 2: WB 2 vs SC 1", player1: null, player2: null, score1: 0, score2: 0, completed: false, type: 'stepladder' },
@@ -440,7 +496,7 @@
 			this.checkAllByeMatches();
 		}
 
-		// Prüft ob ein Match gegen ein Freilos stattfindet und packt den Sieger automatisch weiter
+		// Prüft ob ein Match gegen ein Freilos stattfindet
 		checkAllByeMatches() {
 			const processMatch = (m) => {
 				if (m.completed && !m.winner && (TournamentManager.isBye(m.player1) || TournamentManager.isBye(m.player2))) {
@@ -454,7 +510,7 @@
 			this.winnerBracket.forEach(round => round.forEach(processMatch));
 			this.loserBracket.forEach(round => round.forEach(processMatch));
 		}
-		// schließt Freilos Matches automatisch ab
+
 		autoCompleteByeMatch(m) {
 			if (!m.player1 || !m.player2) return;
 
@@ -471,7 +527,6 @@
 			if (m.completed) this.advanceWinner(m);
 		}
 
-		// Schickt den Sieger eines Matches in die nächste Runde
 		advanceWinner(m) {
 			if (m.type === 'winner') {
 				const nextWB = this.winnerBracket[m.round + 1];
@@ -479,7 +534,6 @@
 					const idx = Math.floor(this.winnerBracket[m.round].indexOf(m) / 2);
 					if (this.winnerBracket[m.round].indexOf(m) % 2 === 0) nextWB[idx].player1 = m.winner; else nextWB[idx].player2 = m.winner;
 
-					// Verlierer der 1 Runde werden ins Loser Bracket verschoben
 					if (m.round === 0) {
 						if (this.loserBracket.length > 0) {
 							const mapping = this.wbToLbMap[this.winnerBracket[0].indexOf(m)];
@@ -496,7 +550,6 @@
 						}
 					}
 
-					// Halbfinale Verlierer ins Spiel um Platz 3 (Winner Bracket) schieben
 					if (m.round === this.winnerBracket.length - 2) {
 						const lastRound = this.winnerBracket[this.winnerBracket.length - 1];
 						const wb3Match = lastRound.find(match => match.type === 'winner_3rd');
@@ -513,9 +566,7 @@
 					if (!this.hasGroups) {
 						this.stepladder[2].player2 = m.winner;
 						this.stepladder[1].player2 = m.loser;
-						// Falls der Herausforderer bereits in Match 1 (step1) verloren hat und das Turnier auf ihn wartete
 						if (this.stepladder[0].completed && this.stepladder[0].winner === this.stepladder[0].player2) {
-							// Wenn  Platz 1 und 2 feststehen wird das Turnier beendet 
 							if (this.stepladder[1].player2 && this.stepladder[2].player2) {
 								this.tournamentOver = true;
 							}
@@ -525,7 +576,6 @@
 			} else if (m.type === 'winner_3rd') {
 				if (!this.hasGroups) {
 					this.stepladder[0].player2 = m.winner;
-					// Falls Match 1 bereits fertig ist und SC 1 verloren hat
 					if (this.stepladder[0].completed && this.stepladder[0].winner === this.stepladder[0].player2) {
 						if (this.stepladder[1].player2 && this.stepladder[2].player2) {
 							this.tournamentOver = true;
@@ -540,7 +590,6 @@
 					const isP1 = this.loserBracket[m.round].indexOf(m) % 2 === 0;
 					if (isP1) nextLR[idx].player1 = m.winner; else nextLR[idx].player2 = m.winner;
 					
-					// NEU: Halbfinale Verlierer der Bronze-Runde ins Spiel um Platz 3 (Bronze) schieben
 					if (this.hasGroups && m.round === this.loserBracket.length - 2) {
 						const lastRound = this.loserBracket[this.loserBracket.length - 1];
 						const lb3Match = lastRound.find(match => match.type === 'loser_3rd');
@@ -562,12 +611,10 @@
 			}
 		}
 
-		// Hilfsmethode um ein leeres Match Objekt zu erzeugen
 		createMatch(round, p1, p2, type) {
 			return { id: this.matchIdCounter++, round, player1: p1, player2: p2, score1: 0, score2: 0, completed: false, winner: null, loser: null, type };
 		}
 
-		// Baut die Gewinner Runden hierarchisch auf
 		createWBRounds() {
 			let r = 0;
 			while (this.winnerBracket[r].length > 1) {
@@ -581,7 +628,6 @@
 			}
 		}
 
-		// Baut die Verlierer-Runden hierarchisch auf
 		createLBRounds() {
 			let r = 0;
 			while (this.loserBracket[r].length > 1) {
@@ -589,14 +635,12 @@
 				for (let i = 0; i < this.loserBracket[r].length; i += 2) next.push(this.createMatch(r + 1, null, null, 'loser'));
 				this.loserBracket.push(next); r++;
 			}
-			// NEU: Spiel um Platz 3 im Loser Bracket (Bronze), wenn Gruppenphase aktiv
 			if (this.hasGroups && this.loserBracket.length > 0 && this.loserBracket[0].length > 1) {
 				const thirdPlaceMatch = this.createMatch(r, null, null, 'loser_3rd');
 				this.loserBracket[r].push(thirdPlaceMatch);
 			}
 		}
 
-		// Verwandelt rohe Daten aus der Datenbank wieder in ein Objekt 
 		static fromJSON(data) {
 			const t = new TournamentManager(data.name || "Turnier", [], false, data.hasGroups === true);
 			Object.assign(t, data);
@@ -621,20 +665,20 @@
 	 * ============================================================
 	 */
 
-	// User Login -> prüft ob der Hash übereinstimmt und setzt Admin-Status direkt aus DB
 	async function authenticate(username, password) {
 		if (!username || !password) return false;
 		try {
-			const { doc, getDoc } = window.dbFunctions;
-			const ref = doc(window.db, CONFIG.USERS_COL, username);
-			const snap = await getDoc(ref);
-			if (snap.exists()) {
-				const inputHash = await hashPassword(password);
-				const dbPass = snap.data().password;
-				if (dbPass === inputHash) {
-					state.currentUser = { username, ...snap.data() };
-					// Admin-Rolle prüfen
-					state.isAdmin = snap.data().isAdmin === true;
+			const inputHash = await hashPassword(password);
+			const res = await fetch(`/.netlify/functions/api-proxy?action=login`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ username, hash: inputHash })
+			});
+			if (res.ok) {
+				const data = await res.json();
+				if (data.success) {
+					state.currentUser = { username, hash: inputHash, isAdmin: data.isAdmin }; 
+					state.isAdmin = data.isAdmin === true;
 					return true;
 				}
 			}
@@ -648,7 +692,6 @@
 	 * ============================================================
 	 */
 
-	// Aktualisiert die Liste der Teilnehmer
 	function loadParticipants() {
 		const list = document.getElementById('participantsList');
 		if (!state.tournament) return;
@@ -656,7 +699,6 @@
 		const activePlayers = new Set();
 		const allPlayers = new Set(t.players.filter(p => !TournamentManager.isBye(p)));
 
-		// Prüft welche Teilnehmer noch in ein Bracket ist
 		const checkMatch = (match) => {
 			if (!match.completed) {
 				if (match.player1 && !TournamentManager.isBye(match.player1)) activePlayers.add(match.player1);
@@ -667,19 +709,16 @@
 		t.loserBracket.forEach(round => round.forEach(checkMatch));
 		t.stepladder.forEach(checkMatch);
 
-		// Während der Gruppenphase sind ALLE Spieler aktiv 
 		if (t.hasGroups && t.groups && t.groups.length > 0) {
 			const bracketHasPlayers = t.winnerBracket.some(round =>
 				round.some(m => m.player1 || m.player2)
 			);
 			if (!bracketHasPlayers) {
-				// Gruppenphase läuft → alle Spieler aus allen Gruppen sind aktiv
 				t.groups.forEach(group => {
 					(group.members || []).forEach(p => {
 						if (p && !TournamentManager.isBye(p)) activePlayers.add(p);
 					});
 				});
-				//  alle allPlayers-Spieler die keiner Gruppe zugeordnet sind hinzufügen
 				allPlayers.forEach(p => activePlayers.add(p));
 			}
 		}
@@ -706,35 +745,34 @@
 	function updateUI() {
 		const loginOverlay = document.getElementById('fullPageLogin');
 		const mainApp = document.getElementById('mainAppContainer');
-		// Login Screen anzeigen oder ausblenden
+
 		if (state.currentUser) { loginOverlay.classList.add('hidden'); mainApp.classList.remove('hidden'); }
 		else { loginOverlay.classList.remove('hidden'); mainApp.classList.add('hidden'); return; }
 
 		const isAdmin = state.isAdmin;
 		document.getElementById('adminBadge').textContent = isAdmin ? `👑 Admin (${state.currentUser.username})` : `👤 Zuschauer (${state.currentUser.username})`;
 
-		// Admin Buttons (werden nur angezeigt wenn man ein Admin ist)
+		// Admin Buttons
 		document.getElementById('newTournamentBtn').classList.toggle('hidden', !isAdmin);
 		document.getElementById('deleteTournamentBtn').classList.toggle('hidden', !isAdmin || !state.tournament);
 		document.getElementById('userMgmtBtn').classList.toggle('hidden', !isAdmin);
 		document.getElementById('adminLogoutBtn').classList.remove('hidden');
 		document.getElementById('participantsBtn').classList.toggle('hidden', !state.tournament);
 
-		// Wenn ein turnier geladen ist werden Brackets und News "gezeichnet"
+		// Tab Buttons & Abschnitte abfragen
+		const groupsTabBtn = document.querySelector('.tab-btn[data-tab="groupsSection"]');
+		const wbTabBtn = document.querySelector('.tab-btn[data-tab="winnerBracket"]');
+		const lbTabBtn = document.querySelector('.tab-btn[data-tab="loserBracket"]');
+		const stepladderTabBtn = document.querySelector('.tab-btn[data-tab="stepladderBracket"]');
+
 		if (state.tournament) {
 			document.getElementById('dashboardTitle').textContent = state.tournament.name;
-			document.getElementById('tournamentSection').classList.remove('hidden');
+			
 			renderBracket('winnerBracket'); renderBracket('loserBracket'); renderStepladder(); renderNews();
 			if (state.tournament.hasGroups) renderGroups();
 
 			const groupsAdmin = document.getElementById('groupsAdminControls');
 			if (groupsAdmin) groupsAdmin.classList.toggle('hidden', !isAdmin);
-
-			// Gruppen-Tab Button anzeigen -> wenn Gruppenphase aktiviert ist
-			const groupsTabBtn = document.querySelector('.tab-btn[data-tab="groupsSection"]');
-			const wbTabBtn = document.querySelector('.tab-btn[data-tab="winnerBracket"]');
-			const lbTabBtn = document.querySelector('.tab-btn[data-tab="loserBracket"]');
-			const stepladderTabBtn = document.querySelector('.tab-btn[data-tab="stepladderBracket"]');
 
 			const hasGroups = state.tournament.hasGroups === true;
 			if (groupsTabBtn) {
@@ -748,7 +786,6 @@
 				}
 			}
 
-			// Prüfen ob alle Gruppenspiele abgeschlossen sind
 			let allGroupsCompleted = true;
 			if (hasGroups && state.tournament.groups) {
 				allGroupsCompleted = state.tournament.groups.length > 0 && state.tournament.groups.every(g =>
@@ -756,7 +793,6 @@
 				);
 			}
 
-			// Gold- und Bronze-Runde ausblenden solange die Gruppenphase läuft
 			const showBrackets = !hasGroups || allGroupsCompleted;
 
 			if (wbTabBtn) {
@@ -794,61 +830,78 @@
 				}
 			}
 
-			// Falls das Gruppen-Modal aktiv ist, Ansicht automatisch neu rendern
 			const groupModal = document.getElementById('groupDetailsModal');
 			if (groupModal && groupModal.classList.contains('active') && state.currentGroupIndex !== null) {
 				openGroupDetails(state.currentGroupIndex);
 			}
 
-			// Top 3 zeigen -> wenn das Turnier beendet wurde
 			const rankingSec = document.getElementById('rankingSection');
-			if (state.tournament.tournamentOver) {
-				rankingSec.classList.remove('hidden');
-				const pod = calculatePodium(state.tournament);
-				
-				if (pod.isGroup) {
-					// Dynamisches generieren der beiden Podeste
-					rankingSec.innerHTML = `
-						<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
-						<div style="display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;">
-							<div style="flex: 1; min-width: 300px;">
-								<h4 style="text-align: center; color: gold; margin-bottom: 10px;">🥇 Gold Runde</h4>
-								<div class="podium">
-									<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.gold[1]}</div></div>
-									<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.gold[0]}</div></div>
-									<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.gold[2]}</div></div>
+			if (rankingSec) {
+				if (state.tournament.tournamentOver) {
+					rankingSec.classList.remove('hidden');
+					const pod = calculatePodium(state.tournament);
+					
+					if (pod.isGroup) {
+						rankingSec.innerHTML = `
+							<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
+							<div style="display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;">
+								<div style="flex: 1; min-width: 300px;">
+									<h4 style="text-align: center; color: gold; margin-bottom: 10px;">🥇 Gold Runde</h4>
+									<div class="podium">
+										<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.gold[1]}</div></div>
+										<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.gold[0]}</div></div>
+										<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.gold[2]}</div></div>
+									</div>
+								</div>
+								<div style="flex: 1; min-width: 300px;">
+									<h4 style="text-align: center; color: #cd7f32; margin-bottom: 10px;">🥇 Silber Runde</h4>
+									<div class="podium">
+										<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.bronze[1]}</div></div>
+										<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.bronze[0]}</div></div>
+										<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.bronze[2]}</div></div>
+									</div>
 								</div>
 							</div>
-							<div style="flex: 1; min-width: 300px;">
-								<h4 style="text-align: center; color: #cd7f32; margin-bottom: 10px;">🥇 Silber Runde</h4>
-								<div class="podium">
-									<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.bronze[1]}</div></div>
-									<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.bronze[0]}</div></div>
-									<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.bronze[2]}</div></div>
-								</div>
+						`;
+					} else {
+						rankingSec.innerHTML = `
+							<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
+							<div class="podium">
+								<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.single[1]}</div></div>
+								<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.single[0]}</div></div>
+								<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.single[2]}</div></div>
 							</div>
-						</div>
-					`;
+						`;
+					}
 				} else {
-					rankingSec.innerHTML = `
-						<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
-						<div class="podium">
-							<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.single[1]}</div></div>
-							<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.single[0]}</div></div>
-							<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.single[2]}</div></div>
-						</div>
-					`;
+					rankingSec.classList.add('hidden');
 				}
-			} else {
-				rankingSec.classList.add('hidden');
 			}
+		} else {
+			// KEIN TURNIER AKTIV: Nur die Turnier-Tabs ausblenden & automatisch auf den "Home"-Tab schalten
+			document.getElementById('dashboardTitle').textContent = "Dart Turnier Dashboard";
+			
+			if (groupsTabBtn) groupsTabBtn.classList.add('hidden');
+			if (wbTabBtn) wbTabBtn.classList.add('hidden');
+			if (lbTabBtn) lbTabBtn.classList.add('hidden');
+			if (stepladderTabBtn) stepladderTabBtn.classList.add('hidden');
+
+			// Aktiven Tab auf Home zurücksetzen
+			document.querySelectorAll('.tab-btn, .tab-content').forEach(el => el.classList.remove('active'));
+			const homeTabBtn = document.querySelector('.tab-btn[data-tab="homeSection"]');
+			const homeTabContent = document.getElementById('homeSection');
+			if (homeTabBtn) homeTabBtn.classList.add('active');
+			if (homeTabContent) homeTabContent.classList.add('active');
+
+			const rankingSec = document.getElementById('rankingSection');
+			if (rankingSec) rankingSec.classList.add('hidden');
 		}
 
 		// Aktualisiert die Info Knöpfe
 		document.getElementById('rulesBtn').onclick = () => showInfoContent(state.globalAssets?.rules);
 		document.getElementById('machineBtn').onclick = () => showInfoContent(state.globalAssets?.machine);
 
-		// Anzeigen oder Verstecken der Bearbeitungs Knöpfe
+		// Admin-spezifische Elemente ein-/ausblenden
 		document.querySelectorAll('.admin-only').forEach(el => el.classList.toggle('hidden', !isAdmin));
 
 		// Admin Registrierungs-Button im Dashboard 
@@ -856,14 +909,13 @@
 		if (regBtn) regBtn.classList.toggle('hidden', !isAdmin);
 	}
 
-	// Lädt eine Userliste für die Adminverwaltung
 	async function loadUsers(filter = '') {
 		if (!requireAdmin()) return;
 		const list = document.getElementById('userList');
 		if (!filter) list.innerHTML = '<p style="text-align:center; padding:20px;">Lade Benutzer...</p>';
 		try {
-			const { collection, getDocs } = window.dbFunctions;
-			const snap = await getDocs(collection(window.db, CONFIG.USERS_COL));
+			const { collection, getDocs } = dbFunctions;
+			const snap = await getDocs(collection(db, CONFIG.USERS_COL));
 			list.innerHTML = '';
 
 			const filteredDocs = snap.docs.filter(doc => doc.id.toLowerCase().includes(filter.toLowerCase()));
@@ -897,7 +949,6 @@
 		}
 	}
 
-	// Löscht einen benutzer aus der Datenbank
 	window.deleteUser = (username) => {
 		if (!requireAdmin()) return;
 		showCustomDialog({
@@ -906,7 +957,7 @@
 			confirmText: "Löschen",
 			onConfirm: async () => {
 				try {
-					await window.dbFunctions.deleteDoc(window.dbFunctions.doc(window.db, CONFIG.USERS_COL, username));
+					await dbFunctions.deleteDoc(dbFunctions.doc(db, CONFIG.USERS_COL, username));
 					showToast("Benutzer gelöscht", "success");
 					loadUsers();
 				} catch (e) {
@@ -917,13 +968,11 @@
 		});
 	};
 
-	// Berechnet Platz 1 bis 3 basierend auf dem Final-Status
 	function calculatePodium(t) {
 		if (t.hasGroups) {
 			let g1 = '-', g2 = '-', g3 = '-';
 			let b1 = '-', b2 = '-', b3 = '-';
 			
-			// Gold Runde Podium
 			if (t.winnerBracket && t.winnerBracket.length > 0) {
 				const finalRound = t.winnerBracket[t.winnerBracket.length - 1];
 				const finalMatch = finalRound.find(m => m.type === 'winner');
@@ -937,7 +986,6 @@
 				}
 			}
 			
-			// Bronze Runde Podium
 			if (t.loserBracket && t.loserBracket.length > 0) {
 				const finalRound = t.loserBracket[t.loserBracket.length - 1];
 				const finalMatch = finalRound.find(m => m.type === 'loser');
@@ -954,11 +1002,10 @@
 			return { isGroup: true, gold: [g1, g2, g3], bronze: [b1, b2, b3] };
 		}
 
-		// Stepladder (ohne Gruppen)
 		const s = t.stepladder;
-		let r1 = s[2]?.player2 || '-'; // WB 1 Default
-		let r2 = s[1]?.player2 || '-'; // WB 2 Default
-		let r3 = s[0]?.player2 || '-'; // WB 3 Default
+		let r1 = s[2]?.player2 || '-';
+		let r2 = s[1]?.player2 || '-';
+		let r3 = s[0]?.player2 || '-';
 
 		if (s[2] && s[2].completed) {
 			r1 = s[2].winner;
@@ -976,7 +1023,6 @@
 		return { isGroup: false, single: [r1, r2, r3] };
 	}
 
-	// Zeigt Text oder Bilder in einem Vollbild Fenster an
 	function showInfoContent(content) {
 		if (!content) { showToast("Inhalt nicht verfügbar", "danger"); return; }
 		const container = document.getElementById('imageModalContent');
@@ -1014,17 +1060,15 @@
 		wrapper.appendChild(btnImg);
 		wrapper.appendChild(btnTxt);
 
-		// Bild oder Text frage
 		showCustomDialog({
 			title: "Inhalt bearbeiten",
 			message: "Möchtest du ein Bild hochladen oder einen Text eingeben?",
 			showCancel: true,
 			cancelText: "Abbrechen",
-			confirmText: "", // Bestätigungs Button ausblenden
+			confirmText: "",
 			customContent: wrapper
 		});
 
-		// Bestätigungs Button ausblenden für diesen Dialog
 		document.getElementById('dialogConfirmBtn').style.display = 'none';
 
 		btnImg.onclick = () => {
@@ -1044,7 +1088,6 @@
 			textInput.rows = 5;
 			textInput.value = isText ? currentContent : '';
 
-			// Text eingabe
 			showCustomDialog({
 				title: "Text eingeben",
 				message: "Bearbeite den Text für diesen Bereich:",
@@ -1059,7 +1102,6 @@
 		};
 	};
 
-	// Bild hochladen
 	window.handleUpload = async (event, type) => {
 		if (!requireAdmin()) return;
 		const file = event.target.files[0];
@@ -1091,14 +1133,12 @@
 		else adminPanel.classList.add('hidden');
 
 		const news = state.tournament.news || [];
-		// Sortiert die News (gepinnt zuerst und danach nach den Timestamp)
 		const sortedNews = [...news].sort((a, b) => {
 			if (a.pinned && !b.pinned) return -1;
 			if (!a.pinned && b.pinned) return 1;
 			return b.timestamp - a.timestamp;
 		});
 
-		// Schaut ob keine Nachrichten vorhanden sind
 		if (sortedNews.length === 0) {
 			newsList.innerHTML = '<p style="color: var(--text-dim); text-align: center; padding: 20px;">Keine Nachrichten vorhanden.</p>';
 			return;
@@ -1132,7 +1172,6 @@
 		});
 	}
 
-	// News hinzufügen
 	window.addNews = async () => {
 		if (!requireAdmin()) return;
 		const titleInput = document.getElementById('newsTitleInput');
@@ -1151,12 +1190,12 @@
 			pinned: false
 		};
 		state.tournament.news.push(newPost);
+		updateUI();
 		await saveToCloud();
 		titleInput.value = '';
 		contentInput.value = '';
 	};
 
-	// Automatischer Post für Match Ergebnisse
 	window.addSystemNews = async (title, content, shouldSave = true) => {
 		if (!state.tournament.news) state.tournament.news = [];
 		const newPost = {
@@ -1168,10 +1207,12 @@
 			system: true
 		};
 		state.tournament.news.push(newPost);
-		if (shouldSave) await saveToCloud();
+		if (shouldSave) {
+			updateUI();
+			await saveToCloud();
+		}
 	};
 
-	// Posts löschen
 	window.deleteNews = async (id) => {
 		if (!requireAdmin()) return;
 		showCustomDialog({
@@ -1180,21 +1221,21 @@
 			confirmText: "Löschen",
 			onConfirm: async () => {
 				state.tournament.news = state.tournament.news.filter(n => n.id !== id);
+				updateUI();
 				await saveToCloud();
 				showToast("Nachricht gelöscht", "success");
 			}
 		});
 	};
 
-	// Posts pinnen oder entpinnen
 	window.pinNews = async (id) => {
 		if (!requireAdmin()) return;
 		const post = state.tournament.news.find(n => n.id === id);
 		if (post) post.pinned = !post.pinned;
+		updateUI();
 		await saveToCloud();
 	};
 
-	// Posts bearbeiten
 	window.editNews = async (id) => {
 		if (!requireAdmin()) return;
 		const post = state.tournament.news.find(n => n.id === id);
@@ -1216,13 +1257,13 @@
 		wrapper.appendChild(titleIn);
 		wrapper.appendChild(contentIn);
 
-		// Zeigt das Fenster zum bearbeiten an
 		showCustomDialog({
 			title: "Nachricht bearbeiten",
 			customContent: wrapper,
 			onConfirm: async () => {
 				post.title = titleIn.value;
 				post.content = contentIn.value;
+				updateUI();
 				await saveToCloud();
 				showToast("Nachricht aktualisiert", "success");
 			}
@@ -1235,12 +1276,13 @@
 	 * ============================================================
 	 */
 
-	// Zeichnet die Verbindungslinien zwischen den Matches
 	function drawConnectors(svg, rounds, gradientId) {
+		if (!svg || !svg.parentElement || svg.parentElement.offsetParent === null) return;
+
 		const containerRect = svg.parentElement.getBoundingClientRect();
-		// Alle vorhandenen Pfade vorher entfernen, um Überlappungen zu vermeiden
 		const existingPaths = svg.querySelectorAll('path');
 		existingPaths.forEach(p => p.remove());
+
 		for (let roundIndex = 0; roundIndex < rounds.length - 1; roundIndex++) {
 			const currentRound = rounds[roundIndex];
 			const nextRound = rounds[roundIndex + 1];
@@ -1258,6 +1300,8 @@
 				const r1 = m1Node.getBoundingClientRect();
 				const r2 = m2Node.getBoundingClientRect();
 				const rN = nextNode.getBoundingClientRect();
+
+				if (!r1 || !r2 || !rN) continue;
 
 				const xRight = r1.right - containerRect.left;
 				const xLeftNext = rN.left - containerRect.left;
@@ -1292,6 +1336,8 @@
 					const thirdNode = nextRound.matches[1];
 					if (thirdNode) {
 						const r3 = thirdNode.getBoundingClientRect();
+						if (!r3) continue;
+
 						const y3 = r3.top - containerRect.top + r3.height / 2;
 						const path3rd = document.createElementNS('http://www.w3.org/2000/svg', 'path');
 						path3rd.setAttribute('class', 'bracket-line');
@@ -1326,18 +1372,17 @@
 
 	const SETTINGS_KEY = 'dartTurnierSettings';
 	const SETTINGS_DEFAULTS = {
-		bracketStyle: 'classic',  // 'classic' | 'modern'
-		accentColor: 'blue',     // 'blue' | 'purple' | 'green' | 'orange' | 'pink' | 'red' | 'cyan'
-		compact: false,      // Kompakter Modus
-		connectors: true,       // SVG-Verbindungslinien
-		newsRefresh: false,      // News Autorefresh alle 30s
-		showTileLabels: false     // Kachel-Beschriftung dauerhaft anzeigen
+		bracketStyle: 'classic', 
+		accentColor: 'blue',     
+		compact: false,      
+		connectors: true,       
+		newsRefresh: false,      
+		showTileLabels: false     
 	};
 
 	let appSettings = { ...SETTINGS_DEFAULTS };
 	let newsRefreshInterval = null;
 
-	// Lädt die Settings aus localStorage
 	function loadSettings() {
 		try {
 			const saved = localStorage.getItem(SETTINGS_KEY);
@@ -1349,7 +1394,6 @@
 		applySettings();
 	}
 
-	// Speichert die Settings in localStorage
 	function saveSettings() {
 		try {
 			localStorage.setItem(SETTINGS_KEY, JSON.stringify(appSettings));
@@ -1358,51 +1402,37 @@
 		}
 	}
 
-	// Wendet alle Settings an
 	function applySettings() {
 		const body = document.body;
 
-		// Bracket-Stil
 		body.classList.toggle('bracket-modern', appSettings.bracketStyle === 'modern');
 
-		// Akzentfarbe
 		['blue', 'purple', 'green', 'orange', 'pink', 'red', 'cyan'].forEach(c => body.classList.remove(`accent-${c}`));
 		if (appSettings.accentColor !== 'blue') body.classList.add(`accent-${appSettings.accentColor}`);
 
-		// Kompakter Modus
 		body.classList.toggle('compact-mode', appSettings.compact);
-
-		// Verbindungslinien
 		body.classList.toggle('no-connectors', !appSettings.connectors);
-
-		// Kachel-Beschriftung dauerhaft anzeigen
 		body.classList.toggle('show-tile-labels', appSettings.showTileLabels);
 
-		// News Autorefresh
 		if (newsRefreshInterval) { clearInterval(newsRefreshInterval); newsRefreshInterval = null; }
 		if (appSettings.newsRefresh) {
 			newsRefreshInterval = setInterval(() => { if (state.tournament) renderNews(); }, 30000);
 		}
 	}
 
-	// Füllt das Settings-Modal mit den aktuellen Werten
 	function openSettingsModal() {
-		// Bracket-Stil
 		const styleInput = document.querySelector(`input[name="bracketStyle"][value="${appSettings.bracketStyle}"]`);
 		if (styleInput) styleInput.checked = true;
 
-		// Akzentfarbe
 		document.querySelectorAll('.color-swatch').forEach(btn => {
 			btn.classList.toggle('active', btn.dataset.color === appSettings.accentColor);
 		});
 
-		// Toggles
 		document.getElementById('settingCompact').checked = appSettings.compact;
 		document.getElementById('settingConnectors').checked = appSettings.connectors;
 		document.getElementById('settingNewsRefresh').checked = appSettings.newsRefresh;
 		document.getElementById('settingTileLabels').checked = appSettings.showTileLabels;
 
-		// Sidebar: immer auf ersten Reiter (Allgemein) zurücksetzen
 		document.querySelectorAll('.settings-nav-item').forEach(b => b.classList.remove('active'));
 		const firstNav = document.querySelector('.settings-nav-item[data-tab="allgemein"]');
 		if (firstNav) firstNav.classList.add('active');
@@ -1413,18 +1443,13 @@
 		document.getElementById('settingsModal').classList.add('active');
 	}
 
-
-	// Liest die Formular-Werte aus und wendet sie sofort an
 	function applyAndSaveSettings() {
-		// Bracket-Stil
 		const styleSelected = document.querySelector('input[name="bracketStyle"]:checked');
 		if (styleSelected) appSettings.bracketStyle = styleSelected.value;
 
-		// Akzentfarbe
 		const activeColor = document.querySelector('.color-swatch.active');
 		if (activeColor) appSettings.accentColor = activeColor.dataset.color;
 
-		// Toggles
 		appSettings.compact = document.getElementById('settingCompact').checked;
 		appSettings.connectors = document.getElementById('settingConnectors').checked;
 		appSettings.newsRefresh = document.getElementById('settingNewsRefresh').checked;
@@ -1433,7 +1458,6 @@
 		saveSettings();
 		applySettings();
 
-		// Brackets neu rendern -> wenn Turnier aktiv
 		if (state.tournament) {
 			renderBracket('winnerBracket');
 			renderBracket('loserBracket');
@@ -1444,11 +1468,10 @@
 		showToast('✅ Einstellungen gespeichert', 'success');
 	}
 
-	// Setzt alle Settings auf Standardwerte zurück
 	function resetSettings() {
 		appSettings = { ...SETTINGS_DEFAULTS };
 		saveSettings();
-		openSettingsModal(); // Modal neu befüllen
+		openSettingsModal();
 		applySettings();
 		if (state.tournament) {
 			renderBracket('winnerBracket');
@@ -1458,7 +1481,6 @@
 		showToast('↺ Einstellungen zurückgesetzt', 'primary');
 	}
 
-	// Uhrzeit formatieren
 	function formatTime(timeStr) {
 		return timeStr;
 	}
@@ -1474,7 +1496,6 @@
 		return `📅 ${formattedDate}, ${formatTime(game.time)} Uhr`;
 	}
 
-	// Generiert das visuelle HTML für Winner- und Loser Bracket
 	function renderBracket(type) {
 		const container = document.querySelector(`#${type} .bracket-scroll`);
 		if (!container) return; container.innerHTML = '';
@@ -1521,14 +1542,13 @@
                 <div class="match-vs">vs</div>
                 <div class="match-player ${m.winner === m.player2 && m.completed ? 'winner' : (m.loser === m.player2 && m.completed ? 'loser' : '')}"><span>${m.player2 || 'TBD'}</span><span class="match-score">${m.score1 === 0 && m.score2 === 0 && m.completed && isP2B ? '' : m.score2}</span></div>`;
 				if (state.isAdmin && m.player1 && m.player2 && !isP1B && !isP2B) div.onclick = () => openMatch(m);
-				// Spielzeit aus dem Kalender anzeigen (immer reservierter Container für konsistente Kachelhöhe)
+				
 				const scheduleInfo = (!isPureBye && m.player1 && m.player2 && !isP1B && !isP2B) ? getScheduledGameInfo(m.player1, m.player2) : null;
 				const schedDiv = document.createElement('div');
 				if (!m.completed && !isPureBye && m.player1 && m.player2 && !isP1B && !isP2B) {
 					schedDiv.className = 'match-schedule' + (scheduleInfo ? '' : ' not-scheduled');
 					schedDiv.textContent = scheduleInfo || '⏳ Noch nicht geplant';
 				} else {
-					// Reservierter unsichtbarer Platzhalter bei abgeschlossenen Matches, damit die Höhe exakt gleich bleibt
 					schedDiv.className = 'match-schedule placeholder';
 					schedDiv.style.visibility = 'hidden';
 					schedDiv.textContent = '⏳ Placeholder';
@@ -1543,7 +1563,6 @@
 		setTimeout(() => drawConnectors(svg, rounds, gradientId), 300);
 	}
 
-	// Generiert das visuelle HTML für das Stepladder Finale
 	function renderStepladder() {
 		const container = document.querySelector('#stepladderBracket .bracket-scroll');
 		if (!container) return; container.innerHTML = '';
@@ -1554,7 +1573,6 @@
             <div class="match-player ${m.winner === m.player1 && m.completed ? 'winner' : (m.loser === m.player1 && m.completed ? 'loser' : '')}"><span>${m.player1 || 'TBD'}</span><span class="match-score">${m.score1}</span></div>
             <div class="match-vs">vs</div>
             <div class="match-player ${m.winner === m.player2 && m.completed ? 'winner' : (m.loser === m.player2 && m.completed ? 'loser' : '')}"><span>${m.player2 || 'TBD'}</span><span class="match-score">${m.score2}</span></div>`;
-			// Spielzeit aus dem Kalender anzeigen (nur wenn nicht abgeschlossen)
 			if (!m.completed && m.player1 && m.player2) {
 				const scheduleInfo = getScheduledGameInfo(m.player1, m.player2);
 				const schedDiv = document.createElement('div');
@@ -1567,7 +1585,6 @@
 		});
 	}
 
-	// Generiert das visuelle HTML für die Gruppen-Übersicht
 	function renderGroups() {
 		const container = document.getElementById('groupsContainer');
 		if (!container) return;
@@ -1643,9 +1660,7 @@
 					return { name: mName, points: st.Pt, wins: st.W, plusPts: st.plusPts, lostPts: st.lostPts };
 				}).sort((a, b) => {
 					if (b.points !== a.points) return b.points - a.points;
-					// Tiebreaker 1: Mehr Plus-Punkte (gesamt erzielte Punkte)
 					if (b.plusPts !== a.plusPts) return b.plusPts - a.plusPts;
-					// Tiebreaker 2: Weniger Verlier-Punkte (kassierten Punkte)
 					if (a.lostPts !== b.lostPts) return a.lostPts - b.lostPts;
 					return a.name.localeCompare(b.name);
 				});
@@ -1699,7 +1714,6 @@
 
 		document.getElementById('groupDetailsTitle').textContent = `GRUPPENPHASE - ${group.title || `GRUPPE ${groupIndex + 1}`}`;
 
-		// Platz berechnen
 		const standings = {};
 		group.members.forEach(m => {
 			const mName = typeof m === 'string' ? m : m.name;
@@ -1725,7 +1739,6 @@
 					standings[p2].Pt += 1;
 					standings[p1].L++;
 				}
-				// Plus-Punkte und Verlier-Punkte für alle Spiele akkumulieren
 				standings[p1].plusPts += (match.score1 || 0);
 				standings[p1].lostPts += (match.score2 || 0);
 				standings[p2].plusPts += (match.score2 || 0);
@@ -1735,18 +1748,13 @@
 
 		const standingArray = Object.values(standings).sort((a, b) => {
 			if (b.Pt !== a.Pt) return b.Pt - a.Pt;
-			// Tiebreaker 1: Mehr Plus-Punkte (gesamt erzielte Punkte)
 			if (b.plusPts !== a.plusPts) return b.plusPts - a.plusPts;
-			// Tiebreaker 2: Weniger Verlier-Punkte (kassierten Punkte)
 			if (a.lostPts !== b.lostPts) return a.lostPts - b.lostPts;
 			return a.name.localeCompare(b.name);
 		});
 
-		// Bestimme für jeden Spieler, worauf die Platzierung im Vergleich zu den Nachbarn basiert
 		standingArray.forEach((s, idx) => {
-			s.decidedBy = 'Pt'; // Standardmäßig durch Punkte entschieden
-
-			// Prüfe den Vergleich mit dem Vorgänger oder Nachfolger bei Punktgleichheit
+			s.decidedBy = 'Pt';
 			const prev = standingArray[idx - 1];
 			const next = standingArray[idx + 1];
 
@@ -1754,12 +1762,10 @@
 			const tiedWithNext = next && next.Pt === s.Pt;
 
 			if (tiedWithPrev || tiedWithNext) {
-				// Wenn Punktgleichheit besteht, entschied die Leg-Differenz bzw. Leg-Punkte den Platz
 				s.decidedBy = 'Legs';
 			}
 		});
 
-		// Punkte updaten
 		group.members = group.members.map(m => {
 			const mName = typeof m === 'string' ? m : m.name;
 			const pts = standings[mName] ? standings[mName].Pt : 0;
@@ -1830,7 +1836,7 @@
 
 			if (state.isAdmin) {
 				row.onclick = () => {
-					match.groupIndex = groupIndex; // Attach group index for handleResult
+					match.groupIndex = groupIndex;
 					openMatch(match);
 				};
 			}
@@ -1840,7 +1846,6 @@
 		document.getElementById('groupDetailsModal').classList.add('active');
 	}
 
-	// Rendert Gruppen für archiviertes Turnier
 	function renderArchivedGroups(tournament, container) {
 		if (!container) return;
 		container.innerHTML = '';
@@ -1858,7 +1863,7 @@
 			const allCompleted = group.matches && group.matches.length > 0 && group.matches.every(m => m.completed);
 			const card = document.createElement('div');
 			card.className = 'group-card glass' + (allCompleted ? ' completed' : '');
-			card.style.cursor = 'default'; // Im Archiv nicht anklickbar für Details
+			card.style.cursor = 'default';
 
 			const header = document.createElement('div');
 			header.className = 'group-header';
@@ -1906,9 +1911,7 @@
 					return { name: mName, points: st.Pt, wins: st.W, plusPts: st.plusPts, lostPts: st.lostPts };
 				}).sort((a, b) => {
 					if (b.points !== a.points) return b.points - a.points;
-					// Tiebreaker 1: Mehr Plus-Punkte (gesamt erzielte Punkte)
 					if (b.plusPts !== a.plusPts) return b.plusPts - a.plusPts;
-					// Tiebreaker 2: Weniger Verlier-Punkte (kassierten Punkte)
 					if (a.lostPts !== b.lostPts) return a.lostPts - b.lostPts;
 					return a.name.localeCompare(b.name);
 				});
@@ -1959,8 +1962,6 @@
 	 * ============================================================
 	 */
 
-
-	// Öffnet das Eingabefenster für einen Punktestand
 	function openMatch(m) {
 		if (!requireAdmin()) return;
 		state.editingMatch = m;
@@ -1968,7 +1969,6 @@
 		document.getElementById('matchModal').classList.add('active');
 	}
 
-	// Vearbeitet das eingetragene Ergebnis und rückt Spieler vor
 	async function handleResult() {
 		if (!requireAdmin()) return;
 		const m = state.editingMatch;
@@ -1985,14 +1985,11 @@
 			if (m.type === 'winner' || m.type === 'winner_3rd' || m.type === 'loser' || m.type === 'loser_3rd') {
 				t.advanceWinner(m);
 			} else if (m.type === 'group') {
-				// Gruppenübersicht auf der Hauptseite aktualisieren
 				renderGroups();
-				// Re-render group details directly falls offen.
 				if (m.groupIndex !== undefined) {
 					openGroupDetails(m.groupIndex);
 				}
 
-				// Prüfen ob alle Gruppenspiele beendet sind -> Falls ja: Brackets aus Gruppenergebnissen befüllen
 				const allCompleted = t.groups && t.groups.length > 0 && t.groups.every(g =>
 					g.matches && g.matches.length > 0 && g.matches.every(match => match.completed)
 				);
@@ -2004,7 +2001,6 @@
 					if (m.winner === m.player1) {
 						t.stepladder[1].player1 = m.winner;
 					} else {
-						// Turnier nur beenden, wenn Platz 1 und 2 bereits feststehen
 						if (t.stepladder[1].player2 && t.stepladder[2].player2) {
 							t.tournamentOver = true;
 						} else {
@@ -2015,7 +2011,6 @@
 					if (m.winner === m.player1) {
 						t.stepladder[2].player1 = m.winner;
 					} else {
-						// Turnier nur beenden, wenn Platz 1 bereits feststeht
 						if (t.stepladder[2].player2) {
 							t.tournamentOver = true;
 						} else {
@@ -2036,7 +2031,6 @@
 				}
 			}
 
-			// News Feed Nachricht erstellen (mit dynamischer Benennung je nach Modus)
 			let matchTitle = m.title;
 			if (!matchTitle) {
 				if (m.type === 'winner') {
@@ -2086,39 +2080,37 @@
 				
 				await addSystemNews(`🎊 TURNIER BEENDET 🎊`, newsContent, false);
 
-				// Auto-Archivierung -> Turnier wird archivieren wenn es beendet ist
-				await saveToCloud(); // speichern
-				await archiveTournament(); // archivieren
+				updateUI();
+				await saveToCloud();
+				await archiveTournament();
 				return;
 			}
 
-
-			// Automatische Löschung des geplanten Spiels aus dem Kalender -> wenn das Ergebnis eingetragen wurde
 			if (state.plannedGames && state.plannedGames.length > 0) {
 				const plannedMatch = state.plannedGames.find(g =>
 					g.title.startsWith(`${m.player1} vs. ${m.player2}`) ||
 					g.title.startsWith(`${m.player2} vs. ${m.player1}`)
 				);
 				if (plannedMatch) {
-					const { doc, deleteDoc } = window.dbFunctions;
-					await deleteDoc(doc(window.db, CONFIG.GAMES_COL, plannedMatch.id)).catch(err => console.error("Auto-delete failed:", err));
+					const { doc, deleteDoc } = dbFunctions;
+					await deleteDoc(doc(db, CONFIG.GAMES_COL, plannedMatch.id)).catch(err => console.error("Auto-delete failed:", err));
 				}
 			}
 
-			await saveToCloud();
 			updateUI();
+			await saveToCloud();
 		} finally {
 			document.getElementById('matchModal').classList.remove('active');
 		}
 	}
 
-	// Turnier Status in die Datenbank speichern
 	async function saveToCloud() {
-		if (!state.tournament || !window.dbFunctions) return;
-		const { doc, setDoc } = window.dbFunctions;
+		if (!state.tournament || !dbFunctions) return;
+		const { doc, setDoc } = dbFunctions;
 		const winnerObj = {}; state.tournament.winnerBracket.forEach((r, i) => winnerObj[`round_${i}`] = r);
 		const loserObj = {}; state.tournament.loserBracket.forEach((r, i) => loserObj[`round_${i}`] = r);
-		await setDoc(doc(window.db, CONFIG.DB_COL, CONFIG.DB_DOC), {
+		
+		const tournamentData = {
 			name: state.tournament.name, players: state.tournament.players,
 			stepladder: state.tournament.stepladder, winnerBracket: winnerObj,
 			loserBracket: loserObj, tournamentOver: state.tournament.tournamentOver,
@@ -2127,15 +2119,18 @@
 			groups: state.tournament.groups || [],
 			wbToLbMap: state.tournament.wbToLbMap || {},
 			matchIdCounter: state.tournament.matchIdCounter || 0
-		});
+		};
+
+		lastTournamentHash = JSON.stringify(tournamentData);
+
+		await setDoc(doc(db, CONFIG.DB_COL, CONFIG.DB_DOC), tournamentData);
 	}
 
-	// Speichert die globalen Assets (Regeln, Dartautomat)
 	async function saveAssetsToCloud() {
-		if (!window.dbFunctions) return;
+		if (!dbFunctions) return;
 		if (!requireAdmin()) return;
-		const { doc, setDoc } = window.dbFunctions;
-		await setDoc(doc(window.db, CONFIG.DB_COL, CONFIG.ASSETS_DOC), state.globalAssets || {});
+		const { doc, setDoc } = dbFunctions;
+		await setDoc(doc(db, CONFIG.DB_COL, CONFIG.ASSETS_DOC), state.globalAssets || {});
 	}
 
 	/**
@@ -2144,15 +2139,13 @@
 	 * ============================================================
 	 */
 
-	// Archiviert das aktuelle Turnier
 	async function archiveTournament() {
-		if (!state.tournament || !window.dbFunctions) return;
+		if (!state.tournament || !dbFunctions) return;
 		if (!requireAdmin()) return;
 
-		const { doc, setDoc } = window.dbFunctions;
+		const { doc, setDoc } = dbFunctions;
 		const archiveId = `tournament_${Date.now()}`;
 
-		// Konvertiere Brackets für Speicherung
 		const winnerObj = {};
 		state.tournament.winnerBracket.forEach((r, i) => winnerObj[`round_${i}`] = r);
 		const loserObj = {};
@@ -2174,11 +2167,10 @@
 			archivedAt: Date.now()
 		};
 
-		await setDoc(doc(window.db, CONFIG.ARCHIVES_COL, archiveId), archiveData);
+		await setDoc(doc(db, CONFIG.ARCHIVES_COL, archiveId), archiveData);
 		showToast("Turnier archiviert!", "success");
 	}
 
-	// Löscht ein archiviertes Turnier
 	async function deleteArchivedTournament(archiveId) {
 		if (!requireAdmin()) return;
 		showCustomDialog({
@@ -2187,8 +2179,8 @@
 			confirmText: "Endgültig Löschen",
 			onConfirm: async () => {
 				try {
-					const { doc, deleteDoc } = window.dbFunctions;
-					await deleteDoc(doc(window.db, CONFIG.ARCHIVES_COL, archiveId));
+					const { doc, deleteDoc } = dbFunctions;
+					await deleteDoc(doc(db, CONFIG.ARCHIVES_COL, archiveId));
 					showToast("Archiv gelöscht.", "success");
 					loadTournamentArchives();
 				} catch (e) {
@@ -2199,21 +2191,19 @@
 		});
 	}
 
-	// Lädt alle archivierten Turniere
 	async function loadTournamentArchives() {
 		const list = document.getElementById('archiveList');
 		list.innerHTML = '<p style="text-align:center; padding:20px;">Lade Archive...</p>';
 
 		try {
-			const { collection, getDocs } = window.dbFunctions;
-			const snap = await getDocs(collection(window.db, CONFIG.ARCHIVES_COL));
+			const { collection, getDocs } = dbFunctions;
+			const snap = await getDocs(collection(db, CONFIG.ARCHIVES_COL));
 
 			if (snap.empty) {
 				list.innerHTML = '<p style="text-align:center; padding:20px; color:var(--text-dim);">Keine archivierten Turniere gefunden.</p>';
 				return;
 			}
 
-			// Sortiere nach Datum (neueste zuerst)
 			const archives = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
 				.sort((a, b) => (b.archivedAt || 0) - (a.archivedAt || 0));
 
@@ -2229,10 +2219,8 @@
 					minute: '2-digit'
 				});
 
-				// FIX: Daten aus der DB in ein sauberes Objekt mit echten Arrays umwandeln
 				const archiveObj = TournamentManager.fromJSON(archiveData);
 
-				// Berechne Top 3 (oder Gold/Bronze) basierend auf dem sauberen Objekt
 				const podium = calculatePodium(archiveObj);
 				let podiumHtml = '';
 				if (podium.isGroup) {
@@ -2245,7 +2233,6 @@
 				div.className = 'participant-item';
 				div.style.cursor = 'pointer';
 
-				// Layouting
 				const infoDiv = document.createElement('div');
 				infoDiv.innerHTML = `
 				<b style="font-size: 1rem;">${archiveData.name}</b><br>
@@ -2258,7 +2245,6 @@
 				controlsDiv.style.alignItems = 'center';
 				controlsDiv.style.gap = '10px';
 
-				// Admin Delete Button
 				if (state.isAdmin) {
 					const delBtn = document.createElement('button');
 					delBtn.className = 'btn btn-danger small';
@@ -2271,7 +2257,6 @@
 					controlsDiv.appendChild(delBtn);
 				}
 
-				// View Icon
 				const viewIcon = document.createElement('span');
 				viewIcon.style.fontSize = '1.5rem';
 				viewIcon.innerText = '👁️';
@@ -2280,7 +2265,6 @@
 				div.appendChild(infoDiv);
 				div.appendChild(controlsDiv);
 
-				// Weiterhin die originalen Archivdaten übergeben für die Detailansicht
 				div.onclick = () => viewArchivedTournament(archiveData);
 				list.appendChild(div);
 			});
@@ -2290,7 +2274,6 @@
 		}
 	}
 
-	// Zeigt ein archiviertes Turnier an (Read-Only)
 	function viewArchivedTournament(archiveData) {
 		state.viewingArchive = true;
 		const tournament = TournamentManager.fromJSON(archiveData);
@@ -2302,7 +2285,6 @@
 		const content = document.getElementById('archivedTournamentContent');
 		content.innerHTML = '';
 
-		// Podium anzeigen
 		if (tournament.tournamentOver) {
 			const pod = calculatePodium(tournament);
 			const podiumDiv = document.createElement('div');
@@ -2344,7 +2326,6 @@
 			content.appendChild(podiumDiv);
 		}
 
-		// Tab Navigation
 		const tabNav = document.createElement('nav');
 		tabNav.className = 'tab-nav';
 		tabNav.innerHTML = `
@@ -2356,7 +2337,6 @@
 	`;
 		content.appendChild(tabNav);
 
-		// Tab Inhalte
 		const newsTab = document.createElement('div');
 		newsTab.id = 'archive-news';
 		newsTab.className = 'tab-content active';
@@ -2392,7 +2372,6 @@
 		stepladderTab.innerHTML = '<div class="bracket-scroll" style="position: relative;"></div>';
 		content.appendChild(stepladderTab);
 
-		// Tab wechseln
 		tabNav.querySelectorAll('.tab-btn').forEach(btn => {
 			btn.onclick = () => {
 				tabNav.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -2400,7 +2379,6 @@
 				btn.classList.add('active');
 				content.querySelector(`#${btn.dataset.tab}`).classList.add('active');
 
-				// Rendert brackets wenn Tab aktiv 
 				if (btn.dataset.tab === 'archive-groups') {
 					renderArchivedGroups(tournament, groupsTab.querySelector('.groups-grid'));
 				} else if (btn.dataset.tab === 'archive-winner') {
@@ -2414,7 +2392,6 @@
 		});
 	}
 
-	// Rendert News für archivierte Turniere
 	function renderArchivedNews(container, news) {
 		const sortedNews = [...news].sort((a, b) => {
 			if (a.pinned && !b.pinned) return -1;
@@ -2446,7 +2423,6 @@
 		});
 	}
 
-	// Rendert Bracket für archiviertes Turnier (Read-Only)
 	function renderArchivedBracket(tournament, type, container) {
 		container.innerHTML = '';
 		const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -2494,7 +2470,7 @@
 				const isP2B = TournamentManager.isBye(m.player2);
 				const isPureBye = isP1B && isP2B;
 				div.className = `match ${m.completed ? 'completed' : ''} ${isPureBye ? 'match-pure-bye' : ''}`;
-				div.style.opacity = '0.8'; // Read-only indicator
+				div.style.opacity = '0.8';
 				div.innerHTML = `${titleHtml}
 				<div class="match-player ${m.winner === m.player1 && m.completed ? 'winner' : (m.loser === m.player1 && m.completed ? 'loser' : '')}"><span>${m.player1 || 'TBD'}</span><span class="match-score">${m.score1 === 0 && m.score2 === 0 && m.completed && isP1B ? '' : m.score1}</span></div>
 				<div class="match-vs">vs</div>
@@ -2513,14 +2489,13 @@
 		setTimeout(() => drawConnectors(svg, rounds, gradientId), 100);
 	}
 
-	// Rendert Stepladder für archiviertes Turnier (Read-Only)
 	function renderArchivedStepladder(tournament, container) {
 		container.innerHTML = '';
 		tournament.stepladder.forEach(m => {
 			const div = document.createElement('div');
 			div.className = `match ${m.completed ? 'completed' : ''}`;
 			div.style.minWidth = "320px";
-			div.style.opacity = '0.8'; // Read-only indicator
+			div.style.opacity = '0.8';
 			div.innerHTML = `<div style="font-size:0.7rem; color:var(--primary); margin-bottom:5px; font-weight:bold;">${m.title}</div>
 			<div class="match-player ${m.winner === m.player1 && m.completed ? 'winner' : (m.loser === m.player1 && m.completed ? 'loser' : '')}"><span>${m.player1 || 'TBD'}</span><span class="match-score">${m.score1}</span></div>
 			<div class="match-vs">vs</div>
@@ -2536,22 +2511,17 @@
 	 */
 
 	document.addEventListener('DOMContentLoaded', () => {
-		// Settings beim Laden anwenden
 		loadSettings();
 
-		// Settings-Button
 		document.getElementById('settingsBtn').onclick = openSettingsModal;
 		document.getElementById('closeSettingsModal').onclick = () => document.getElementById('settingsModal').classList.remove('active');
 		document.getElementById('applySettingsBtn').onclick = applyAndSaveSettings;
 		document.getElementById('resetSettingsBtn').onclick = resetSettings;
 
-		// Settings Sidebar Navigation (Apple-Stil)
 		document.querySelectorAll('.settings-nav-item').forEach(btn => {
 			btn.onclick = () => {
-				// Nav-Items: active setzen
 				document.querySelectorAll('.settings-nav-item').forEach(b => b.classList.remove('active'));
 				btn.classList.add('active');
-				// Tab-Panes: aktiven wechseln
 				const tab = btn.dataset.tab;
 				document.querySelectorAll('.settings-tab-pane').forEach(p => p.classList.remove('active'));
 				const pane = document.getElementById('settingsTab-' + tab);
@@ -2559,7 +2529,6 @@
 			};
 		});
 
-		// Farbpalette
 		document.querySelectorAll('.color-swatch').forEach(btn => {
 			btn.onclick = () => {
 				document.querySelectorAll('.color-swatch').forEach(b => b.classList.remove('active'));
@@ -2567,14 +2536,12 @@
 			};
 		});
 
-		// Settings-Modal schließen -> bei Klick auf Hintergrund
 		document.getElementById('settingsModal').addEventListener('click', e => {
 			if (e.target === document.getElementById('settingsModal')) {
 				document.getElementById('settingsModal').classList.remove('active');
 			}
 		});
 
-		// Login Fenster -> sobald die Seite angezeigt wird
 		document.getElementById('mainLoginForm').onsubmit = async e => {
 			e.preventDefault();
 			const success = await authenticate(document.getElementById('authUsername').value, document.getElementById('authPassword').value);
@@ -2586,22 +2553,30 @@
 			}
 		};
 
-		// Live Syncronisation mit der Datenbank
 		const startSync = () => {
-			if (window.dbFunctions) {
-				// Turnier Sync
-				window.dbFunctions.onSnapshot(window.dbFunctions.doc(window.db, CONFIG.DB_COL, CONFIG.DB_DOC), s => {
-					state.tournament = s.exists() ? TournamentManager.fromJSON(s.data()) : null; updateUI();
+			if (dbFunctions) {
+				dbFunctions.onSnapshot(dbFunctions.doc(db, CONFIG.DB_COL, CONFIG.DB_DOC), s => {
+					if (s.exists()) {
+						const newData = s.data();
+						const newHash = JSON.stringify(newData);
+						if (newHash !== lastTournamentHash) {
+							lastTournamentHash = newHash;
+							state.tournament = (newData && Object.keys(newData).length > 0) ? TournamentManager.fromJSON(newData) : null;
+							updateUI();
+						}
+					} else if (lastTournamentHash !== null) {
+						lastTournamentHash = null;
+						state.tournament = null;
+						updateUI();
+					}
 				});
-				// Assets Sync
-				window.dbFunctions.onSnapshot(window.dbFunctions.doc(window.db, CONFIG.DB_COL, CONFIG.ASSETS_DOC), s => {
-					state.globalAssets = s.exists() ? s.data() : {}; updateUI();
+				dbFunctions.onSnapshot(dbFunctions.doc(db, CONFIG.DB_COL, CONFIG.ASSETS_DOC), s => {
+					state.globalAssets = s.exists() ? s.data() : {};
 				});
 			} else setTimeout(startSync, 100);
 		};
 		startSync();
 
-		// Tap Umschaltung (Winner bracket /Loser bracket)
 		document.querySelectorAll('.tab-btn').forEach(btn => {
 			btn.onclick = () => {
 				document.querySelectorAll('.tab-btn, .tab-content').forEach(el => el.classList.remove('active'));
@@ -2618,7 +2593,6 @@
 			};
 		});
 
-		// Event listener für Buttons
 		document.getElementById('participantsBtn').onclick = () => { loadParticipants(); document.getElementById('participantsModal').classList.add('active'); };
 		document.getElementById('userMgmtBtn').onclick = () => {
 			if (!requireAdmin()) return;
@@ -2627,7 +2601,6 @@
 			document.getElementById('userModal').classList.add('active');
 		};
 
-		// User Erstellung 
 		document.getElementById('userSearchBar').oninput = e => loadUsers(e.target.value);
 		document.getElementById('createUserBtn').onclick = async () => {
 			if (!requireAdmin()) return;
@@ -2638,7 +2611,7 @@
 
 			try {
 				const hashedPassword = await hashPassword(p);
-				await window.dbFunctions.setDoc(window.dbFunctions.doc(window.db, CONFIG.USERS_COL, u), { password: hashedPassword, isAdmin: isAdminUser });
+				await dbFunctions.setDoc(dbFunctions.doc(db, CONFIG.USERS_COL, u), { password: hashedPassword, isAdmin: isAdminUser });
 				showToast(`Benutzer angelegt! ${isAdminUser ? '(Admin)' : '(Zuschauer)'}`, "success");
 				document.getElementById('newUserName').value = '';
 				document.getElementById('newUserPass').value = '';
@@ -2650,7 +2623,6 @@
 			}
 		};
 
-		// Fenster schließen Events
 		document.getElementById('closeUserModal').onclick = () => document.getElementById('userModal').classList.remove('active');
 		document.getElementById('closeParticipants').onclick = () => document.getElementById('participantsModal').classList.remove('active');
 		document.getElementById('closeImageModal').onclick = () => document.getElementById('imageModal').classList.remove('active');
@@ -2661,7 +2633,6 @@
 		document.getElementById('saveMatchBtn').onclick = handleResult;
 		document.getElementById('closeModal').onclick = () => document.getElementById('matchModal').classList.remove('active');
 
-		// Logout Logik
 		document.getElementById('adminLogoutBtn').onclick = () => {
 			showCustomDialog({
 				title: "Abmelden",
@@ -2675,7 +2646,7 @@
 			});
 		};
 
-		// Turnier löschen
+		// Turnier löschen - JETZT MIT SOFORTIGEM LOKALEM UPDATE
 		document.getElementById('deleteTournamentBtn').onclick = async () => {
 			verifyAdminAction(() => {
 				showCustomDialog({
@@ -2683,16 +2654,16 @@
 					message: "Diese Aktion kann nicht rückgängig gemacht werden!",
 					confirmText: "Endgültig Löschen",
 					onConfirm: async () => {
-						await window.dbFunctions.setDoc(window.dbFunctions.doc(window.db, CONFIG.DB_COL, CONFIG.DB_DOC), {});
 						state.tournament = null;
+						lastTournamentHash = JSON.stringify({});
 						updateUI();
+						await dbFunctions.setDoc(dbFunctions.doc(db, CONFIG.DB_COL, CONFIG.DB_DOC), {});
 						showToast("Turnier gelöscht", "danger");
 					}
 				});
 			});
 		};
 
-		// Spieler Eingabefelder 
 		const addP = () => {
 			const container = document.getElementById('playerInputs');
 			const count = container.children.length;
@@ -2709,13 +2680,13 @@
 			playerNum.style.minWidth = '30px';
 			playerNum.style.opacity = '0.6';
 			playerNum.textContent = `${count + 1}.`;
-			// Eingabe Feld für Name
+
 			const inp = document.createElement('input');
 			inp.className = 'form-input player-in';
 			inp.placeholder = 'Name';
 			inp.style.flex = '1';
 			inp.style.margin = '0';
-			// Delete Button
+
 			const delBtn = document.createElement('button');
 			delBtn.type = 'button';
 			delBtn.className = 'btn btn-danger';
@@ -2734,7 +2705,7 @@
 			div.appendChild(delBtn);
 			container.appendChild(div);
 		};
-		// Neues Turnier erstellen
+
 		document.getElementById('newTournamentBtn').onclick = () => {
 			verifyAdminAction(() => {
 				document.getElementById('setupSection').classList.add('active');
@@ -2742,7 +2713,7 @@
 				for (let i = 0; i < 4; i++) addP();
 			});
 		};
-		// Easter Egg: 3 Klicks auf den Pokal generiert 32 Spieler
+
 		let trophyClicks = 0;
 		let trophyTimer = null;
 		const setupTrophy = document.getElementById('setupTrophy');
@@ -2781,11 +2752,13 @@
 				document.getElementById('shuffleToggle').checked,
 				hasGroups
 			);
-			await saveToCloud();
+
+			updateUI();
 			document.getElementById('setupSection').classList.remove('active');
+
+			await saveToCloud();
 		};
 
-		// Archive Button Event Listener
 		document.getElementById('archiveBtn').onclick = () => {
 			loadTournamentArchives();
 			document.getElementById('archiveModal').classList.add('active');
@@ -2799,7 +2772,6 @@
 			document.getElementById('archiveModal').classList.add('active');
 		};
 
-		// Changelog Modal Event Listener
 		document.getElementById('versionTag').onclick = () => {
 			document.getElementById('changelogModal').classList.add('active');
 		};
@@ -2807,13 +2779,8 @@
 			document.getElementById('changelogModal').classList.remove('active');
 		};
 
-		// Feedback System initialisieren
 		initFeedbackSystem();
-
-		// Registration System initialisieren
 		initRegistrationSystem();
-
-		// Spielplanung initialisieren
 		initGamePlanning();
 	});
 
@@ -2824,7 +2791,6 @@
 	 */
 
 	function initFeedbackSystem() {
-		// Button im Home-Menü
 		const fbBtn = document.getElementById('feedbackBtn');
 		if (fbBtn) {
 			fbBtn.onclick = () => {
@@ -2833,7 +2799,6 @@
 			};
 		}
 
-		// Modal Schließen Buttons
 		document.getElementById('closeFeedbackListModal').onclick = () => {
 			document.getElementById('feedbackListModal').classList.remove('active');
 		};
@@ -2847,7 +2812,7 @@
 				confirmText: "Verwerfen",
 				onConfirm: () => {
 					document.getElementById('formBuilderModal').classList.remove('active');
-					state.editingFormId = null; // Reset editing state
+					state.editingFormId = null;
 				}
 			});
 		};
@@ -2855,7 +2820,6 @@
 			document.getElementById('responseViewerModal').classList.remove('active');
 		};
 
-		// Admin Controls
 		document.getElementById('createNewFormBtn').onclick = openFormBuilder;
 		document.getElementById('saveFormBtn').onclick = submitFeedback;
 		document.getElementById('submitFeedbackBtn').onclick = submitFeedback;
@@ -2863,30 +2827,27 @@
 		window.addQuestionToBuilder = addQuestionToBuilder;
 	}
 
-	// Lädt alle aktiven Umfragen aus der DB
 	async function loadForms() {
 		const list = document.getElementById('feedbackFormsList');
 		const adminControls = document.getElementById('adminFeedbackControls');
 
-		// Admin Controls anzeigen
 		if (state.isAdmin) adminControls.classList.remove('hidden');
 		else adminControls.classList.add('hidden');
 
 		list.innerHTML = '<p style="text-align: center; color: var(--text-dim); padding: 20px;">Lade Formulare...</p>';
 
 		try {
-			const { collection, getDocs } = window.dbFunctions;
-			const snap = await getDocs(collection(window.db, CONFIG.FORMS_COL));
+			const { collection, getDocs } = dbFunctions;
+			const snap = await getDocs(collection(db, CONFIG.FORMS_COL));
 
 			state.activeForms = [];
 			snap.forEach(doc => {
 				const data = doc.data();
-				if (data.active !== false || state.isAdmin) { // Auch inaktive Umfragen anzeigen -> für Admins
+				if (data.active !== false || state.isAdmin) {
 					state.activeForms.push({ id: doc.id, ...data });
 				}
 			});
 
-			// Sortieren nach Erstellung (neueste zuerst)
 			state.activeForms.sort((a, b) => b.createdAt - a.createdAt);
 
 			renderFormList();
@@ -2909,7 +2870,6 @@
 		state.activeForms.forEach(form => {
 			const div = document.createElement('div');
 			div.className = 'participant-item';
-			// Nutzer sehen die Umfrage nur, wenn sie aktiv ist.
 			if (!state.isAdmin && form.active === false) return;
 
 			div.innerHTML = `
@@ -2918,34 +2878,29 @@
                 <div style="font-size:0.8rem; color: var(--text-dim);">${form.description || ''}</div>
             </div>
         `;
-			// Admin prüfung
 			if (state.isAdmin) {
 				const controls = document.createElement('div');
 				controls.style.display = 'flex';
 				controls.style.gap = '5px';
 
-				// Ergebnisse anzeigen
 				const btnResults = document.createElement('button');
 				btnResults.className = 'btn btn-outline small';
 				btnResults.innerHTML = '📊';
 				btnResults.title = 'Ergebnisse';
 				btnResults.onclick = (e) => { e.stopPropagation(); viewResults(form.id); };
 
-				// Bearbeiten
 				const btnEdit = document.createElement('button');
 				btnEdit.className = 'btn btn-outline small';
 				btnEdit.innerHTML = '✏️';
 				btnEdit.title = 'Bearbeiten';
 				btnEdit.onclick = (e) => { e.stopPropagation(); editForm(form.id); };
 
-				// Deaktivieren / Aktivieren
 				const btnToggle = document.createElement('button');
 				btnToggle.className = 'btn btn-outline small';
 				btnToggle.innerHTML = form.active !== false ? '✅' : '🚫';
 				btnToggle.title = form.active !== false ? 'Deaktivieren' : 'Aktivieren';
 				btnToggle.onclick = (e) => { e.stopPropagation(); toggleFormStatus(form.id, form.active !== false); };
 
-				// Löschen
 				const btnDelete = document.createElement('button');
 				btnDelete.className = 'btn btn-danger small';
 				btnDelete.innerHTML = '🗑️';
@@ -2967,7 +2922,6 @@
 		});
 	}
 
-	// Öffnet die View Ansicht für die Nutzer
 	function openFeedbackForm(formId) {
 		const form = state.activeForms.find(f => f.id === formId);
 		if (!form) return;
@@ -2976,7 +2930,6 @@
 		const container = document.getElementById('userFormContainer');
 		container.innerHTML = '';
 
-		// Überschrift
 		const title = document.createElement('h2');
 		title.style.textAlign = 'center';
 		title.style.marginBottom = '10px';
@@ -2995,7 +2948,6 @@
 		const formEl = document.createElement('form');
 		formEl.id = 'activeFeedbackForm';
 
-		// Fragen rendern
 		form.questions.forEach(q => {
 			const wrapper = document.createElement('div');
 			wrapper.className = 'form-group glass';
@@ -3029,21 +2981,18 @@
 				ratingContainer.style.fontSize = '1.5rem';
 				ratingContainer.style.cursor = 'pointer';
 
-				// Hidden Input für den Wert 
 				const input = document.createElement('input');
 				input.type = 'hidden';
 				input.name = q.id;
 				if (q.required) input.required = true;
 				wrapper.appendChild(input);
 
-				// 5 Sterne Fragen Type
 				for (let i = 1; i <= 5; i++) {
 					const star = document.createElement('span');
 					star.textContent = '☆';
 					star.dataset.value = i;
 					star.onclick = () => {
 						input.value = i;
-						// Visuelles Update der Sterne 
 						Array.from(ratingContainer.children).forEach(s => {
 							if (s.tagName === 'SPAN') s.textContent = s.dataset.value <= i ? '⭐' : '☆';
 						});
@@ -3068,7 +3017,6 @@
 
 						const optLabel = document.createElement('label');
 						optLabel.textContent = opt;
-						// Klick auf Label wählt Radio (Radio button = Der Nutzer kann eine Option aus einer Liste auswählen)
 						optLabel.onclick = () => radio.click();
 
 						optWrapper.appendChild(radio);
@@ -3107,12 +3055,10 @@
 		document.getElementById('feedbackFormModal').classList.add('active');
 	}
 
-	// Antworten absenden
 	async function submitFeedback() {
 		const formEl = document.getElementById('activeFeedbackForm');
 		if (!formEl) return;
 
-		//  Validierung
 		if (!formEl.checkValidity()) {
 			formEl.reportValidity();
 			return;
@@ -3133,7 +3079,6 @@
 			}
 		});
 
-		// Validierung für Pflichtfelder
 		let missingFields = [];
 		state.currentForm.questions.forEach(q => {
 			if (q.required) {
@@ -3153,7 +3098,7 @@
 		}
 
 		try {
-			const { doc, setDoc } = window.dbFunctions;
+			const { doc, setDoc } = dbFunctions;
 			const responseId = 'resp_' + Date.now();
 			const responseData = {
 				formId: state.currentForm.id,
@@ -3163,18 +3108,16 @@
 				submittedAt: Date.now()
 			};
 
-			await setDoc(doc(window.db, CONFIG.RESPONSES_COL, responseId), responseData);
+			await setDoc(doc(db, CONFIG.RESPONSES_COL, responseId), responseData);
 
 			showToast("Vielen Dank für dein Feedback!", "success");
 			document.getElementById('feedbackFormModal').classList.remove('active');
-			document.getElementById('feedbackListModal').classList.remove('active'); // Close list too
+			document.getElementById('feedbackListModal').classList.remove('active');
 		} catch (e) {
 			console.error(e);
 			showToast("Fehler beim Senden.", "danger");
 		}
 	}
-
-	// --- BUILDER LOGIK (ADMIN) ---
 
 	let builderQuestionCounter = 0;
 
@@ -3188,7 +3131,7 @@
 		document.getElementById('feedbackListModal').classList.remove('active');
 		document.getElementById('formBuilderModal').classList.add('active');
 
-		state.editingFormId = null; // New state fürs bearbeiten
+		state.editingFormId = null;
 	}
 
 	function addQuestionToBuilder(type) {
@@ -3203,7 +3146,6 @@
 		div.dataset.id = id;
 		div.dataset.type = type;
 
-		// Content Setup (Grundgerüst)
 		let content = `<strong style="color:var(--primary); text-transform:uppercase; font-size:0.8rem;">${type}</strong>`;
 
 		content += `
@@ -3228,11 +3170,10 @@
 
 		div.innerHTML = content;
 
-		// Delete Button hinzufügen
 		const delBtn = document.createElement('button');
 		delBtn.innerHTML = '🗑️';
 		delBtn.className = 'btn btn-danger small';
-		delBtn.type = 'button'; // Speicherung verhindern
+		delBtn.type = 'button';
 		delBtn.style.position = 'absolute';
 		delBtn.style.top = '10px';
 		delBtn.style.right = '10px';
@@ -3272,78 +3213,71 @@
 			}
 		});
 
-		// Prüfung, ob das Formular mindestens 1 Frage hat
 		if (questions.length === 0) {
 			showToast("Das Formular braucht mindestens eine Frage.", "danger");
 			return;
 		}
 
 		try {
-			const { doc, setDoc } = window.dbFunctions;
-			// Benutzt die bestehende ID zum bearbeiten
+			const { doc, setDoc } = dbFunctions;
 			const formId = state.editingFormId ? state.editingFormId : 'form_' + Date.now();
 			const formData = {
 				id: formId,
 				title,
 				description: desc,
-				active: true, // Setzt nach jeder bearbeitung die Umfrage auf aktiv
+				active: true,
 				createdAt: state.editingFormId ? (state.activeForms.find(f => f.id === formId)?.createdAt || Date.now()) : Date.now(),
 				createdBy: state.currentUser ? state.currentUser.username : 'Admin',
 				questions
 			};
 
-			await setDoc(doc(window.db, CONFIG.FORMS_COL, formId), formData, { merge: true });
+			await setDoc(doc(db, CONFIG.FORMS_COL, formId), formData, { merge: true });
 
-			showToast(state.editingFormId ? "Formular aktualisiert!" : "Formular erstellt!", "success"); // Bestätigungs Benachrichtigung
+			showToast(state.editingFormId ? "Formular aktualisiert!" : "Formular erstellt!", "success");
 			document.getElementById('formBuilderModal').classList.remove('active');
 			state.editingFormId = null;
 			loadForms();
 			document.getElementById('feedbackListModal').classList.add('active');
 		} catch (e) {
 			console.error(e);
-			showToast("Fehler beim Speichern.", "danger"); // Fehlermeldung 
+			showToast("Fehler beim Speichern.", "danger");
 		}
 	}
 
-	// --- MANAGEMENT FUNKTIONEN ---
-
 	async function deleteForm(formId) {
 		if (!requireAdmin()) return;
-		// Bestätigungs Dialog (Löschen)
 		showCustomDialog({
 			title: "Formular löschen?",
 			message: "Möchtest du dieses Formular wirklich endgültig löschen? Alle Antworten gehen unwiderruflich verloren!",
 			confirmText: "Löschen",
 			onConfirm: async () => {
 				try {
-					const { doc, deleteDoc } = window.dbFunctions;
-					await deleteDoc(doc(window.db, CONFIG.FORMS_COL, formId));
-					showToast("Formular gelöscht.", "success"); // Bestätigungs Meldung
+					const { doc, deleteDoc } = dbFunctions;
+					await deleteDoc(doc(db, CONFIG.FORMS_COL, formId));
+					showToast("Formular gelöscht.", "success");
 					loadForms();
 				} catch (e) {
 					console.error(e);
-					showToast("Fehler beim Löschen.", "danger"); // Fehlermeldung
+					showToast("Fehler beim Löschen.", "danger");
 				}
 			}
 		});
 	}
 
-	// Status toggeln (Aktiv /Inaktiv)
 	async function toggleFormStatus(formId, isActive) {
 		if (!requireAdmin()) return;
 		try {
-			const { doc, updateDoc } = window.dbFunctions;
-			await updateDoc(doc(window.db, CONFIG.FORMS_COL, formId), {
+			const { doc, updateDoc } = dbFunctions;
+			await updateDoc(doc(db, CONFIG.FORMS_COL, formId), {
 				active: !isActive
 			});
 			loadForms();
 		} catch (e) {
 			console.error(e);
-			showToast("Fehler beim Aktualisieren.", "danger"); // Fehlermeldung
+			showToast("Fehler beim Aktualisieren.", "danger");
 		}
 	}
 
-	// Umfragen bearbeiten
 	function editForm(formId) {
 		if (!requireAdmin()) return;
 		const form = state.activeForms.find(f => f.id === formId);
@@ -3351,24 +3285,18 @@
 
 		state.editingFormId = formId;
 
-		// Daten Laden
 		document.getElementById('builderFormTitle').value = form.title;
 		document.getElementById('builderFormDesc').value = form.description || '';
 		document.getElementById('builderQuestionsContainer').innerHTML = '';
 		builderQuestionCounter = 0;
 
-		// Fragen rekonstruiren
 		form.questions.forEach(q => {
-
-			// Benutzerdefiniertes hinzufügen
 			addQuestionToBuilder(q.type);
 			const lastDiv = document.getElementById('builderQuestionsContainer').lastElementChild;
 
-			// Label aktualisieren
 			lastDiv.querySelector('.q-label').value = q.label;
 			lastDiv.querySelector('.q-required').checked = q.required;
 
-			// Optionen aktualisieren
 			if (q.options && (q.type === 'radio' || q.type === 'checkbox')) {
 				lastDiv.querySelector('.q-options').value = q.options.join(', ');
 			}
@@ -3378,8 +3306,6 @@
 		document.getElementById('formBuilderModal').classList.add('active');
 		showToast("Achtung: Bearbeiten ändert IDs der Fragen möglicherweise!", "warning");
 	}
-
-	// --- ERGEBNISSE ANZEIGEN ---
 
 	async function viewResults(formId) {
 		if (!requireAdmin()) return;
@@ -3393,8 +3319,8 @@
 		document.getElementById('responseViewerModal').classList.add('active');
 
 		try {
-			const { collection, getDocs, query, where } = window.dbFunctions;
-			const q = query(collection(window.db, CONFIG.RESPONSES_COL), where("formId", "==", formId));
+			const { collection, getDocs, query, where } = dbFunctions;
+			const q = query(collection(db, CONFIG.RESPONSES_COL), where("formId", "==", formId));
 			const snap = await getDocs(q);
 
 			if (snap.empty) {
@@ -3404,7 +3330,6 @@
 
 			const responses = [];
 			snap.forEach(d => responses.push(d.data()));
-			// Sortiert nach dem Datum
 			responses.sort((a, b) => b.submittedAt - a.submittedAt);
 
 			renderResponseList(form, responses);
@@ -3419,7 +3344,6 @@
 		const container = document.getElementById('responseListContainer');
 		container.innerHTML = '';
 
-		// 1. DIAGRAMMABSCHNITT
 		const chartQuestions = form.questions.filter(q => q.type === 'rating' || q.type === 'radio' || q.type === 'checkbox');
 
 		if (chartQuestions.length > 0) {
@@ -3444,11 +3368,9 @@
 
 				chartGrid.appendChild(chartCard);
 
-				// Daten berechnen
 				const counts = {};
 
 				if (q.type === 'rating') {
-					// Initialisieren für 1-5 Sterne
 					for (let i = 1; i <= 5; i++) counts[i] = 0;
 				} else if ((q.type === 'radio' || q.type === 'checkbox') && q.options) {
 					q.options.forEach(o => counts[o] = 0);
@@ -3457,15 +3379,14 @@
 				responses.forEach(r => {
 					const ans = r.answers[q.id];
 					if (ans) {
-						if (Array.isArray(ans)) { // Checkbox
+						if (Array.isArray(ans)) {
 							ans.forEach(val => { if (counts[val] !== undefined) counts[val]++; });
-						} else { // Radio / Rating
+						} else {
 							if (counts[ans] !== undefined) counts[ans]++;
 						}
 					}
 				});
 
-				// Diagrammkonfiguration vorbereiten
 				let chartType = 'bar';
 				let labels = Object.keys(counts);
 				let dataValues = Object.values(counts);
@@ -3487,7 +3408,6 @@
 					borderColors = bgColors.map(c => c.replace('0.5', '1'));
 				}
 
-				// Berechnen der Charts
 				new Chart(canvas, {
 					type: chartType,
 					data: {
@@ -3532,8 +3452,6 @@
 			container.appendChild(hr);
 		}
 
-
-		// 2. TEXT EINGABEN
 		responses.forEach(resp => {
 			const card = document.createElement('div');
 			card.className = 'glass';
@@ -3555,7 +3473,7 @@
 				let ansDisplay = '<span style="color:var(--text-dim);">-</span>';
 				if (ans) {
 					if (Array.isArray(ans)) ansDisplay = ans.join(', ');
-					else if (q.type === 'rating') ansDisplay = ans + ' ⭐'; // Zeigt die Sterne im Text
+					else if (q.type === 'rating') ansDisplay = ans + ' ⭐';
 					else ansDisplay = ans;
 				}
 
@@ -3580,7 +3498,6 @@
 	 */
 
 	function initRegistrationSystem() {
-		// Buttons
 		const regBtn = document.getElementById('registrationBtn');
 		if (regBtn) {
 			regBtn.addEventListener('click', openRegistrationModal);
@@ -3596,31 +3513,28 @@
 
 		document.getElementById('registrationForm').onsubmit = submitRegistration;
 
-		// Admin Buttons
 		document.getElementById('saveRegSettingsBtn').onclick = saveRegistrationSettings;
 		document.getElementById('closeAdminRegModal').onclick = () => document.getElementById('adminRegistrationModal').classList.remove('active');
 	}
 
 	async function openRegistrationModal() {
-		// Datenbank Check
-		if (!window.dbFunctions) {
+		if (!dbFunctions) {
 			showToast("Lade Datenbank... Bitte einen Moment Geduld.", "warning");
 			let checkCount = 0;
 			const waitForDb = async () => {
-				if (window.dbFunctions) {
+				if (dbFunctions) {
 					await openRegistrationModal();
 				} else if (checkCount < 20) {
 					checkCount++;
 					setTimeout(waitForDb, 200);
 				} else {
-					showToast("Datenbank Verbindung fehlgeschlagen. Seite neu laden?", "danger"); // Datenbank nicht bereit Fehlermeldung
+					showToast("Datenbank Verbindung fehlgeschlagen. Seite neu laden?", "danger");
 				}
 			};
 			await waitForDb();
 			return;
 		}
 
-		// Admin darf immer verwalten
 		if (state.isAdmin) {
 			loadRegistrationSettings();
 			viewRegistrationList();
@@ -3628,18 +3542,17 @@
 			return;
 		}
 
-		// User checkt Status
-		const { doc, getDoc, getDocs, collection } = window.dbFunctions;
+		const { doc, getDoc, getDocs, collection } = dbFunctions;
 		try {
 			document.getElementById('regOpenContent').classList.add('hidden');
 			document.getElementById('regClosedContent').classList.add('hidden');
 			document.getElementById('regModalTitle').textContent = "Lade Status...";
 			document.getElementById('registrationModal').classList.add('active');
 
-			const settingsSnap = await getDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
+			const settingsSnap = await getDoc(doc(db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
 			const settings = settingsSnap.exists() ? settingsSnap.data() : { active: false };
 
-			const regsSnap = await getDocs(collection(window.db, CONFIG.REGISTRATIONS_COL));
+			const regsSnap = await getDocs(collection(db, CONFIG.REGISTRATIONS_COL));
 			const currentCount = regsSnap.docs.filter(d => d.id !== CONFIG.REG_SETTINGS_DOC).length;
 
 			const now = Date.now();
@@ -3660,7 +3573,6 @@
 
 			document.getElementById('regModalTitle').textContent = "📝 Turnieranmeldung";
 
-			// Deadline anzeigen (wenn vorhanden)
 			if (settings.deadline) {
 				const dateStr = new Date(settings.deadline).toLocaleString('de-DE');
 				document.getElementById('regDeadlineInfo').textContent = `Anmeldeschluss: ${dateStr}`;
@@ -3670,19 +3582,17 @@
 				document.getElementById('regDeadlineInfo').classList.add('hidden');
 			}
 
-			// Teilnehmeranzahl anzeigen (z.B. 1/32) mit Farben je nach Anzahl
 			const maxParticipants = settings.maxParticipants || Infinity;
 			const maxDisplay = maxParticipants === Infinity ? "∞" : maxParticipants;
 			const countEl = document.getElementById('regCountInfo');
 			countEl.textContent = `Angemeldet: ${currentCount} / ${maxDisplay}`;
 
-			// Farbe basierend auf Anzahl
 			if (currentCount >= maxParticipants) {
-				countEl.style.color = 'var(--danger)'; // Rot -> wenn voll
+				countEl.style.color = 'var(--danger)';
 			} else if (currentCount >= maxParticipants * 0.8) {
-				countEl.style.color = 'var(--warning)'; // Gelb -> wenn fast voll (80%+)
+				countEl.style.color = 'var(--warning)';
 			} else {
-				countEl.style.color = 'var(--success)'; // Grün -> wenn noch viele Plätze frei sind
+				countEl.style.color = 'var(--success)';
 			}
 
 			if (isClosed) {
@@ -3710,8 +3620,8 @@
 		}
 
 		try {
-			const { doc, setDoc, getDoc, getDocs, collection } = window.dbFunctions;
-			const settingsSnap = await getDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
+			const { doc, setDoc, getDoc, getDocs, collection } = dbFunctions;
+			const settingsSnap = await getDoc(doc(db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
 			const settings = settingsSnap.exists() ? settingsSnap.data() : { active: false };
 
 			if (!settings.active) {
@@ -3719,7 +3629,7 @@
 				return;
 			}
 
-			const regsSnap = await getDocs(collection(window.db, CONFIG.REGISTRATIONS_COL));
+			const regsSnap = await getDocs(collection(db, CONFIG.REGISTRATIONS_COL));
 			const currentCount = regsSnap.docs.filter(d => d.id !== CONFIG.REG_SETTINGS_DOC).length;
 
 			if (currentCount >= (settings.maxParticipants || Infinity)) {
@@ -3728,7 +3638,7 @@
 			}
 
 			const regId = 'reg_' + Date.now();
-			await setDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, regId), {
+			await setDoc(doc(db, CONFIG.REGISTRATIONS_COL, regId), {
 				nickname: encryptName(nickname),
 				registeredAt: Date.now()
 			});
@@ -3744,16 +3654,16 @@
 
 	async function loadRegistrationSettings() {
 		if (!requireAdmin()) return;
-		const { doc, getDoc, getDocs, collection } = window.dbFunctions;
+		const { doc, getDoc, getDocs, collection } = dbFunctions;
 		try {
-			const settingsSnap = await getDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
+			const settingsSnap = await getDoc(doc(db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
 			const settings = settingsSnap.exists() ? settingsSnap.data() : { active: false, maxParticipants: 32 };
 
 			document.getElementById('regActiveToggle').checked = settings.active;
 			document.getElementById('regDeadlineInput').value = settings.deadline || "";
 			document.getElementById('regMaxParticipants').value = settings.maxParticipants || 32;
 
-			const regsSnap = await getDocs(collection(window.db, CONFIG.REGISTRATIONS_COL));
+			const regsSnap = await getDocs(collection(db, CONFIG.REGISTRATIONS_COL));
 			const count = regsSnap.docs.filter(d => d.id !== CONFIG.REG_SETTINGS_DOC).length;
 
 			document.getElementById('regCurrentCount').textContent = count;
@@ -3771,8 +3681,8 @@
 		const maxParticipants = parseInt(document.getElementById('regMaxParticipants').value) || 32;
 
 		try {
-			const { doc, setDoc } = window.dbFunctions;
-			await setDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC), {
+			const { doc, setDoc } = dbFunctions;
+			await setDoc(doc(db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC), {
 				active,
 				deadline,
 				maxParticipants
@@ -3791,8 +3701,8 @@
 		list.innerHTML = '<p style="text-align:center; padding:10px;">Lade Liste...</p>';
 
 		try {
-			const { collection, getDocs, deleteDoc, doc } = window.dbFunctions;
-			const snap = await getDocs(collection(window.db, CONFIG.REGISTRATIONS_COL));
+			const { collection, getDocs, deleteDoc, doc } = dbFunctions;
+			const snap = await getDocs(collection(db, CONFIG.REGISTRATIONS_COL));
 
 			const regs = snap.docs
 				.filter(d => d.id !== CONFIG.REG_SETTINGS_DOC)
@@ -3824,7 +3734,7 @@
 						message: `Möchtest du die Anmeldung von ${displayName} wirklich entfernen?`,
 						confirmText: "Löschen",
 						onConfirm: async () => {
-							await deleteDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, reg.id));
+							await deleteDoc(doc(db, CONFIG.REGISTRATIONS_COL, reg.id));
 							showToast("Anmeldung entfernt", "success");
 							viewRegistrationList();
 							loadRegistrationSettings();
@@ -3857,7 +3767,7 @@
 			document.getElementById('addGameForm').reset();
 			const searchInput = document.getElementById('matchPickerSearch');
 			if (searchInput) searchInput.value = '';
-			document.getElementById('gameTitleInput').value = ""; // Reset hidden input
+			document.getElementById('gameTitleInput').value = "";
 			const display = document.getElementById('selectedMatchDisplay');
 			if (display) {
 				display.textContent = "";
@@ -3865,14 +3775,13 @@
 			}
 			document.getElementById('gameDateInput').value = state.selectedDate;
 			document.getElementById('overlapWarning').classList.add('hidden');
-			updateMatchPicker(); // Liste der Spiele aus den Brackets laden
+			updateMatchPicker();
 			document.getElementById('addGameModal').classList.add('active');
 		};
 		document.getElementById('closeAddGameModal').onclick = () => document.getElementById('addGameModal').classList.remove('active');
 
 		document.getElementById('addGameForm').onsubmit = savePlannedGame;
 
-		// Echtzeit validierung
 		const inputs = ['gameDateInput', 'gameTimeInput', 'gameDurationInput'];
 		inputs.forEach(id => {
 			document.getElementById(id).addEventListener('input', validateGameForm);
@@ -3885,36 +3794,32 @@
 			};
 		}
 
-		// Spielplanung initialisieren
 		const dateInput = document.getElementById('gameDateInput');
 		if (dateInput) {
 			dateInput.min = new Date().toISOString().split('T')[0];
 		}
 
-		// Live Syncronisation der Spiele
-		if (window.dbFunctions) {
-			const { collection, onSnapshot, query } = window.dbFunctions;
-			onSnapshot(collection(window.db, CONFIG.GAMES_COL), (snapshot) => {
+		if (dbFunctions) {
+			const { collection, onSnapshot, query } = dbFunctions;
+			onSnapshot(collection(db, CONFIG.GAMES_COL), (snapshot) => {
 				state.plannedGames = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-				// Spiele von vergangenen Tagen löschen
 				const today = new Date().toISOString().split('T')[0];
-				const { doc, deleteDoc } = window.dbFunctions;
+				const { doc, deleteDoc } = dbFunctions;
 				state.plannedGames.forEach(async (game) => {
 					if (game.date < today) {
 						console.log("Cleanup: Lösche veraltetes Spiel:", game.title, game.date);
-						await deleteDoc(doc(window.db, CONFIG.GAMES_COL, game.id)).catch(e => console.error(e));
+						await deleteDoc(doc(db, CONFIG.GAMES_COL, game.id)).catch(e => console.error(e));
 					}
 				});
 
 				renderCalendar();
 				showGamesForDate(state.selectedDate);
-				if (!isSavingGame) validateGameForm(); // Nur validieren, wenn nicht gespeichert wird
+				if (!isSavingGame) validateGameForm();
 			});
 		}
 	}
 
-	// Auswahl der Matches
 	function updateMatchPicker(filterText = '') {
 		const container = document.getElementById('matchPickerContainer');
 		const hiddenInput = document.getElementById('gameTitleInput');
@@ -3932,7 +3837,6 @@
 			const p1b = TournamentManager.isBye(p1);
 			const p2b = TournamentManager.isBye(p2);
 
-			// Nur Spiele hinzufügen, in denen beide Spieler echt sind (kein TBD)
 			const isP1Real = p1 && !p1b && p1 !== 'TBD';
 			const isP2Real = p2 && !p2b && p2 !== 'TBD';
 
@@ -3952,12 +3856,10 @@
 			}
 		};
 
-		// Brackets durchsuchen
 		t.winnerBracket.forEach(r => r.forEach(extractFromMatch));
 		t.loserBracket.forEach(r => r.forEach(extractFromMatch));
 		t.stepladder.forEach(extractFromMatch);
 
-		// Gruppenphase durchsuchen
 		if (t.groups && t.groups.length > 0) {
 			t.groups.forEach(g => {
 				if (g.matches) {
@@ -3971,7 +3873,6 @@
 			return;
 		}
 
-		// Doppelte Prüfung: Nur unique Einträge
 		const uniqueMatches = [...new Set(matches)].sort();
 
 		const filteredMatches = uniqueMatches.filter(m => m.toLowerCase().includes(filterText.toLowerCase()));
@@ -3982,7 +3883,6 @@
 		}
 
 		filteredMatches.forEach(matchText => {
-			// Bereits geplante spiele überspringen
 			const isAlreadyPlanned = state.plannedGames && state.plannedGames.some(g => g.title.startsWith(matchText));
 			if (isAlreadyPlanned) return;
 
@@ -3992,9 +3892,7 @@
 			div.onclick = () => {
 				container.querySelectorAll('.match-picker-item').forEach(el => el.classList.remove('selected'));
 				div.classList.add('selected');
-				// Wert speichern
 				hiddenInput.value = matchText;
-				// Anzeige aktualisieren
 				if (display) {
 					display.textContent = `Ausgewählt: ${matchText}`;
 					display.style.display = "block";
@@ -4004,9 +3902,8 @@
 		});
 	}
 
-	// Validierung
 	function validateGameForm() {
-		if (isSavingGame) return; // Abbruch wenn gerade gespeichert wird
+		if (isSavingGame) return;
 		const date = document.getElementById('gameDateInput').value;
 		const time = document.getElementById('gameTimeInput').value;
 		const duration = document.getElementById('gameDurationInput').value;
@@ -4023,14 +3920,13 @@
 		const dayGames = state.plannedGames.filter(g => g.date === date);
 		const hasOverlap = checkOverlapLogic(dummyGame, dayGames);
 
-		//Turnier überlapungs Prüfung
 		if (hasOverlap) {
 			warning.classList.remove('hidden');
 			if (saveBtn) {
 				saveBtn.disabled = true;
 				saveBtn.style.opacity = '0.5';
 				saveBtn.style.cursor = 'not-allowed';
-				saveBtn.textContent = '❌ Konflikt erkannt';  // Speicher Button ändern
+				saveBtn.textContent = '❌ Konflikt erkannt';
 			}
 		} else {
 			warning.classList.add('hidden');
@@ -4043,14 +3939,12 @@
 		}
 	}
 
-	// Planungs UI anzeigen
 	function openGamePlanningModal() {
 		document.getElementById('gamePlanningModal').classList.add('active');
 		renderCalendar();
 		showGamesForDate(state.selectedDate);
 	}
 
-	// Kalender Laden
 	function renderCalendar() {
 		const container = document.getElementById('calendarContainer');
 		if (!container) return;
@@ -4061,11 +3955,9 @@
 		const mIdx = month.getMonth();
 		const monthName = new Intl.DateTimeFormat('de-DE', { month: 'long', year: 'numeric' }).format(month);
 
-		// Überschrift
 		const header = document.createElement('div');
 		header.className = 'calendar-header';
 
-		// Navigation einschränken (vergangene Monate nicht anzeigen)
 		const now = new Date();
 		const isCurrentMonth = month.getFullYear() === now.getFullYear() && month.getMonth() === now.getMonth();
 
@@ -4087,11 +3979,9 @@
 			renderCalendar();
 		};
 
-		// Grid
 		const grid = document.createElement('div');
 		grid.className = 'calendar-grid';
 
-		// Wochentage
 		['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'].forEach(d => {
 			const div = document.createElement('div');
 			div.className = 'calendar-weekday';
@@ -4099,12 +3989,10 @@
 			grid.appendChild(div);
 		});
 
-		// Tage
-		const firstDay = new Date(year, mIdx, 1).getDay(); // 0(Sun) to 6(Sat)
-		const adjFirstDay = firstDay === 0 ? 6 : firstDay - 1; // 0(Mon) to 6(Sun)
+		const firstDay = new Date(year, mIdx, 1).getDay();
+		const adjFirstDay = firstDay === 0 ? 6 : firstDay - 1;
 		const daysInMonth = new Date(year, mIdx + 1, 0).getDate();
 
-		// Anzeige der Vormonate
 		const prevDaysInMonth = new Date(year, mIdx, 0).getDate();
 		for (let i = adjFirstDay - 1; i >= 0; i--) {
 			const div = document.createElement('div');
@@ -4113,7 +4001,6 @@
 			grid.appendChild(div);
 		}
 
-		// Aktueller Tag
 		const today = new Date().toISOString().split('T')[0];
 		for (let d = 1; d <= daysInMonth; d++) {
 			const dateStr = `${year}-${String(mIdx + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
@@ -4126,7 +4013,6 @@
 			if (dateStr === today) div.classList.add('today');
 			if (dateStr === state.selectedDate) div.classList.add('selected');
 
-			// Prüfen ob an dem Tag ein Spiel stattfindet
 			const hasGames = state.plannedGames.some(g => g.date === dateStr);
 			if (hasGames) div.classList.add('has-games');
 
@@ -4143,7 +4029,6 @@
 			grid.appendChild(div);
 		}
 
-		// Anzeige der nächsten Monate
 		let cellsSoFar = grid.children.length;
 		let nextMonthDay = 1;
 		while (cellsSoFar % 7 !== 0 || cellsSoFar < 49) {
@@ -4158,7 +4043,6 @@
 		container.appendChild(grid);
 	}
 
-	// Spiele für den Tag anzeigen
 	function showGamesForDate(dateStr) {
 		const list = document.getElementById('dailyGamesList');
 		const title = document.getElementById('selectedDateTitle');
@@ -4197,7 +4081,6 @@
             </div>
         `;
 
-			// Geplante spiele löschen button
 			if (state.isAdmin) {
 				const delBtn = document.createElement('button');
 				delBtn.className = 'btn btn-danger small';
@@ -4210,7 +4093,6 @@
 		});
 	}
 
-	// Prüfung für Überlapen
 	function checkOverlapLogic(game, allDayGames) {
 		const start1 = timeToMinutes(game.time);
 		const end1 = start1 + parseInt(game.duration);
@@ -4229,7 +4111,6 @@
 		return h * 60 + m;
 	}
 
-	// Speichern der geplanten Spiele
 	async function savePlannedGame(e) {
 		e.preventDefault();
 		const date = document.getElementById('gameDateInput').value;
@@ -4246,14 +4127,13 @@
 			return;
 		}
 
-		// Überlapungs check
 		const dummyGame = { id: 'temp', time, duration };
 		const dayGames = state.plannedGames.filter(g => g.date === date);
 		const hasOverlap = checkOverlapLogic(dummyGame, dayGames);
 
 		if (hasOverlap) {
 			showToast("Speichern nicht möglich: Zeitlicher Konflikt!", "danger");
-			validateGameForm(); // Refresh UI state
+			validateGameForm();
 			return;
 		}
 
@@ -4262,9 +4142,9 @@
 
 		isSavingGame = true;
 		try {
-			const { doc, setDoc } = window.dbFunctions;
+			const { doc, setDoc } = dbFunctions;
 			const id = 'game_' + Date.now();
-			await setDoc(doc(window.db, CONFIG.GAMES_COL, id), {
+			await setDoc(doc(db, CONFIG.GAMES_COL, id), {
 				date,
 				time,
 				duration,
@@ -4286,7 +4166,6 @@
 		}
 	}
 
-	//Geplante Spiele löschen 
 	async function deletePlannedGame(id) {
 		if (!requireAdmin()) return;
 		showCustomDialog({
@@ -4295,12 +4174,12 @@
 			confirmText: "Löschen",
 			onConfirm: async () => {
 				try {
-					const { doc, deleteDoc } = window.dbFunctions;
-					await deleteDoc(doc(window.db, CONFIG.GAMES_COL, id));
+					const { doc, deleteDoc } = dbFunctions;
+					await deleteDoc(doc(db, CONFIG.GAMES_COL, id));
 					showToast("Spiel gelöscht.", "success");
 				} catch (e) {
 					console.error(e);
-					showToast("Fehler beim Löschen.", "danger"); //Fehlermeldung
+					showToast("Fehler beim Löschen.", "danger");
 				}
 			}
 		});

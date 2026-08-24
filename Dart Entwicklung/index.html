@@ -221,8 +221,6 @@
         </div>
     </div>
 
-
-
     <div id="imageModal" class="modal-overlay">
         <div class="card glass modal-card image-viewer-card">
             <div id="imageModalContent" class="image-container">
@@ -303,11 +301,10 @@
                     <div class="news-header">
                         <div class="news-title-group">
                             <h4 class="news-title">Version 5 - Funktions Update</h4>
-                            <span class="news-date">12.08.2026</span>
+                            <span class="news-date">14.08.2026</span>
                         </div>
                     </div>
                     <div class="news-content">
-
                         <div class="feature-block highlight">
                             <h5> 👥 Gruppenphase hinzugefügt</h5>
                             <ul>
@@ -316,7 +313,6 @@
                                 <li>Automatisches Punkte System hinzugefügt</li>
                             </ul>
                         </div>
-
                         <div class="feature-block">
                             <h5> ⚙️ Einstellungen hinzugefügt</h5>
                             <ul>
@@ -383,9 +379,7 @@
 
             <hr style="border: 0; border-top: 1px solid var(--border); margin: 20px 0;">
 
-            <div id="builderQuestionsContainer" style="display: flex; flex-direction: column; gap: 15px;">
-                <!-- Dynamically added questions -->
-            </div>
+            <div id="builderQuestionsContainer" style="display: flex; flex-direction: column; gap: 15px;"></div>
 
             <div class="add-question-bar"
                 style="margin-top: 20px; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 12px; border: 1px dashed var(--border);">
@@ -413,9 +407,7 @@
     <!-- FORM VIEWER MODAL (USER) -->
     <div id="feedbackFormModal" class="modal-overlay">
         <div class="card glass modal-card" style="width: 700px; max-width: 95vw; max-height: 90vh; overflow-y: auto;">
-            <div id="userFormContainer">
-                <!-- Form content renders here -->
-            </div>
+            <div id="userFormContainer"></div>
             <div class="form-actions" style="margin-top: 25px; display: flex; gap: 10px;">
                 <button id="closeUserFormBtn" class="btn btn-outline" style="flex: 1;">Abbrechen</button>
                 <button id="submitFeedbackBtn" class="btn btn-primary" style="flex: 1;">📤 Absenden</button>
@@ -431,9 +423,7 @@
                 <button id="closeResponseViewerBtn" class="btn btn-outline small">Schließen</button>
             </div>
             <div id="responseListContainer" class="participants-list-scroll"
-                style="min-height: 200px; max-height: 60vh;">
-                <!-- Responses list here -->
-            </div>
+                style="min-height: 200px; max-height: 60vh;"></div>
         </div>
     </div>
 
@@ -479,7 +469,6 @@
             </div>
 
             <div class="group-details-layout" style="display: flex; gap: 30px; flex: 1; overflow: hidden;">
-                <!-- Left: Matches -->
                 <div class="group-matches-col"
                     style="flex: 2; display: flex; flex-direction: column; overflow-y: auto; padding-right: 10px;">
                     <div class="group-matches-header"
@@ -490,12 +479,9 @@
                         <div>Spieler 2</div>
                         <div style="text-align: center;">Ergebnis</div>
                     </div>
-                    <div id="groupMatchesList" style="display: flex; flex-direction: column; gap: 10px;">
-                        <!-- Matches will be generated here -->
-                    </div>
+                    <div id="groupMatchesList" style="display: flex; flex-direction: column; gap: 10px;"></div>
                 </div>
 
-                <!-- Right: Standings -->
                 <div class="group-standings-col"
                     style="flex: 1; background: rgba(255,255,255,0.02); border-radius: 12px; padding: 15px;">
                     <h3
@@ -514,9 +500,7 @@
                                 <th style="padding-bottom: 10px; text-align: center;">Legs</th>
                             </tr>
                         </thead>
-                        <tbody id="groupStandingsBody">
-                            <!-- Standings will be generated here -->
-                        </tbody>
+                        <tbody id="groupStandingsBody"></tbody>
                     </table>
                 </div>
             </div>
@@ -569,9 +553,7 @@
 
             <h4 style="color: var(--primary); margin-bottom: 15px; font-size: 0.8rem; text-transform: uppercase;">
                 ANGEMELDETE SPIELER</h4>
-            <div id="registeredUsersList" class="participants-list-scroll" style="min-height: 200px;">
-                <!-- List will be populated here -->
-            </div>
+            <div id="registeredUsersList" class="participants-list-scroll" style="min-height: 200px;"></div>
         </div>
     </div>
 
@@ -579,7 +561,6 @@
     <div id="gamePlanningModal" class="modal-overlay">
         <div class="card glass modal-card"
             style="width: 1000px; max-width: 95vw; max-height: 90vh; overflow: hidden; display: flex; flex-direction: column; padding: 0;">
-            <!-- Header/Titel -->
             <div
                 style="display: flex; justify-content: space-between; align-items: center; padding: 20px; border-bottom: 1px solid var(--border);">
                 <h2 style="margin: 0;">📅 Spielplanung</h2>
@@ -587,10 +568,8 @@
             </div>
 
             <div style="display: flex; flex: 1; overflow: hidden; height: 100%;">
-                <!-- Linke Spalte: Informationen & Liste (so wie im Bild) -->
                 <div
                     style="flex: 1.2; border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden;">
-                    <!-- Info-Header: Ausgewählter Tag | Anzahl -->
                     <div
                         style="display: flex; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02);">
                         <div style="flex: 1; padding: 15px; border-right: 1px solid var(--border);">
@@ -610,22 +589,14 @@
                         </div>
                     </div>
 
-                    <!-- Die Liste der Turniere -->
                     <div id="dailyGamesList" class="participants-list-scroll"
-                        style="flex: 1; padding: 20px; overflow-y: auto;">
-                        <!-- Hier kommen die Spiele rein -->
-                    </div>
+                        style="flex: 1; padding: 20px; overflow-y: auto;"></div>
                 </div>
 
-                <!-- Rechte Spalte: Kalender & Buttons -->
                 <div
                     style="flex: 0.8; padding: 25px; display: flex; flex-direction: column; gap: 25px; background: rgba(0,0,0,0.15);">
-                    <!-- Kalender (Oben) -->
-                    <div id="calendarContainer" class="calendar-wrapper" style="flex: 1;">
-                        <!-- Kalender Content -->
-                    </div>
+                    <div id="calendarContainer" class="calendar-wrapper" style="flex: 1;"></div>
 
-                    <!-- Buttons (Unten) -->
                     <div style="padding-top: 20px; border-top: 1px solid var(--border);">
                         <button id="openAddGameBtn" class="btn btn-primary full-width"
                             style="height: 55px; font-size: 1rem; text-transform: uppercase; letter-spacing: 1px; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);">➕
@@ -635,7 +606,6 @@
             </div>
         </div>
     </div>
-
 
     <!-- ADD GAME MODAL -->
     <div id="addGameModal" class="modal-overlay">
@@ -677,9 +647,7 @@
                     <input type="text" id="matchPickerSearch" class="form-input" placeholder="🔍 Paarung filtern..."
                         style="margin-bottom: 10px; border-radius: 8px;">
                     <div id="matchPickerContainer" class="participants-list-scroll"
-                        style="height: 180px; border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: rgba(0,0,0,0.3); overflow-y: auto;">
-                        <!-- Custom match buttons will be rendered here -->
-                    </div>
+                        style="height: 180px; border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: rgba(0,0,0,0.3); overflow-y: auto;"></div>
                     <input type="hidden" id="gameTitleInput" required>
                     <p id="selectedMatchDisplay"
                         style="margin-top: 12px; font-size: 0.9rem; color: var(--primary); font-weight: 800; text-align: center; display: none;">
@@ -704,7 +672,6 @@
     <!-- SETTINGS MODAL -->
     <div id="settingsModal" class="modal-overlay">
         <div class="card glass modal-card settings-modal-card">
-            <!-- Header -->
             <div class="settings-header">
                 <div class="settings-header-left">
                     <div class="settings-icon-wrapper">⚙️</div>
@@ -716,10 +683,7 @@
                 <button id="closeSettingsModal" class="btn btn-outline small">✕</button>
             </div>
 
-            <!-- Apple-style two-column layout -->
             <div class="settings-layout">
-
-                <!-- SIDEBAR NAV -->
                 <nav class="settings-sidebar">
                     <button class="settings-nav-item active" data-tab="allgemein">
                         <span class="settings-nav-icon">⚙️</span>
@@ -731,17 +695,12 @@
                         <span class="settings-nav-label">Darstellung</span>
                         <span class="settings-nav-arrow">›</span>
                     </button>
-
                 </nav>
 
-                <!-- CONTENT PANE -->
                 <div class="settings-content">
-
-                    <!-- TAB: DARSTELLUNG -->
                     <div class="settings-tab-pane active" id="settingsTab-darstellung">
                         <div class="settings-tab-title">Darstellung</div>
 
-                        <!-- TURNIERBAUM STIL -->
                         <div class="settings-section">
                             <div class="settings-section-title">
                                 <span class="settings-section-icon">🌳</span>
@@ -783,7 +742,6 @@
                             </div>
                         </div>
 
-                        <!-- AKZENTFARBE -->
                         <div class="settings-section">
                             <div class="settings-section-title">
                                 <span class="settings-section-icon">🎨</span>
@@ -809,7 +767,6 @@
                             </div>
                         </div>
 
-                        <!-- TOGGLE EINSTELLUNGEN -->
                         <div class="settings-section">
                             <div class="settings-section-title">
                                 <span class="settings-section-icon">🔧</span>
@@ -819,8 +776,7 @@
                                 <div class="settings-toggle-item">
                                     <div class="settings-toggle-info">
                                         <span class="settings-toggle-label">Kompakter Modus</span>
-                                        <span class="settings-toggle-desc">Kleinere Match-Karten für mehr
-                                            Übersicht</span>
+                                        <span class="settings-toggle-desc">Kleinere Match-Karten für mehr Übersicht</span>
                                     </div>
                                     <label class="toggle-switch">
                                         <input type="checkbox" id="settingCompact">
@@ -840,8 +796,7 @@
                                 <div class="settings-toggle-item">
                                     <div class="settings-toggle-info">
                                         <span class="settings-toggle-label">Kachel-Beschriftung</span>
-                                        <span class="settings-toggle-desc">Text auf den Kacheln dauerhaft
-                                            anzeigen</span>
+                                        <span class="settings-toggle-desc">Text auf den Kacheln dauerhaft anzeigen</span>
                                     </div>
                                     <label class="toggle-switch">
                                         <input type="checkbox" id="settingTileLabels">
@@ -852,7 +807,6 @@
                         </div>
                     </div>
 
-                    <!-- TAB: ALLGEMEIN -->
                     <div class="settings-tab-pane" id="settingsTab-allgemein">
                         <div class="settings-tab-title">Allgemein</div>
 
@@ -884,24 +838,18 @@
                                 <div class="settings-toggle-item">
                                     <div class="settings-toggle-info">
                                         <span class="settings-toggle-label">Einstellungen zurücksetzen</span>
-                                        <span class="settings-toggle-desc">Alle Einstellungen auf Standard
-                                            zurücksetzen</span>
+                                        <span class="settings-toggle-desc">Alle Einstellungen auf Standard zurücksetzen</span>
                                     </div>
                                     <button id="resetSettingsBtn" class="btn btn-outline small">↺ Reset</button>
                                 </div>
                             </div>
                         </div>
                     </div>
-
-
-
                 </div>
             </div>
 
-            <!-- Footer -->
             <div class="settings-footer">
-                <button id="applySettingsBtn" class="btn btn-primary" style="flex:1;">✓ Übernehmen &amp;
-                    Schließen</button>
+                <button id="applySettingsBtn" class="btn btn-primary" style="flex:1;">✓ Übernehmen &amp; Schließen</button>
             </div>
         </div>
     </div>
@@ -909,14 +857,6 @@
     <!-- TOAST NOTIFICATIONS -->
     <div id="toastContainer" class="toast-container"></div>
 
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getFirestore, doc, setDoc, getDoc, updateDoc, collection, getDocs, deleteDoc, onSnapshot, query, where } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-        const firebaseConfig = { apiKey: "AIzaSyBsYbqC_WKbjZgw3-8dm-j5hUDOhevODPw", authDomain: "dart-manager-9fca1.firebaseapp.com", projectId: "dart-manager-9fca1", storageBucket: "dart-manager-9fca1.firebasestorage.app", messagingSenderId: "719983318369", appId: "1:719983318369:web:6a2a1aa348bfcd04646120", measurementId: "G-YRCW9JLVV7" };
-        const app = initializeApp(firebaseConfig);
-        window.db = getFirestore(app);
-        window.dbFunctions = { doc, setDoc, getDoc, updateDoc, collection, getDocs, deleteDoc, onSnapshot, query, where };
-    </script>
     <script src="script.js"></script>
 </body>
 
