@@ -1,6 +1,12 @@
 (function () {
-	window.db = "proxy_db";
-	window.dbFunctions = {
+	const db = "proxy_db";
+
+	const getAuthHeader = () => {
+		if (!state.currentUser || !state.currentUser.hash) return {};
+		return { 'Authorization': `${state.currentUser.username}:${state.currentUser.hash}` };
+	};
+
+	const dbFunctions = {
 		doc: (db, col, id) => {
 			if (typeof col === 'object') return { path: col.path + '/' + id };
 			if (id) return { path: col + '/' + id };
@@ -11,7 +17,9 @@
 		where: (field, op, value) => ({ field, op, value }),
 		getDoc: async (ref) => {
 			try {
-				const res = await fetch(`/.netlify/functions/api-proxy?action=getDoc&path=${encodeURIComponent(ref.path)}`);
+				const res = await fetch(`/.netlify/functions/api-proxy?action=getDoc&path=${encodeURIComponent(ref.path)}`, {
+					headers: getAuthHeader()
+				});
 				const json = await res.json();
 				return { exists: () => json.exists, id: json.id, data: () => json.data };
 			} catch(e) { console.error("API-Proxy getDoc Fehler:", e); return { exists: () => false, data: () => ({}) }; }
@@ -20,7 +28,9 @@
 			try {
 				let url = `/.netlify/functions/api-proxy?action=getDocs&path=${encodeURIComponent(ref.path)}`;
 				if (ref.conditions) url += `&conditions=${encodeURIComponent(JSON.stringify(ref.conditions))}`;
-				const res = await fetch(url);
+				const res = await fetch(url, { 
+					headers: getAuthHeader()
+				});
 				const json = await res.json();
 				return {
 					empty: json.empty,
@@ -30,23 +40,28 @@
 			} catch(e) { console.error("API-Proxy getDocs Fehler:", e); return { empty: true, docs: [], forEach: () => {} }; }
 		},
 		setDoc: async (ref, data, options) => {
-			await fetch(`/.netlify/functions/api-proxy?action=setDoc&path=${encodeURIComponent(ref.path)}`, {
-				method: 'POST', body: JSON.stringify({ data, options })
+			const res = await fetch(`/.netlify/functions/api-proxy?action=setDoc&path=${encodeURIComponent(ref.path)}`, {
+				method: 'POST', headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+				body: JSON.stringify({ data, options })
 			});
+			if (!res.ok) throw new Error("Keine Berechtigung");
 		},
 		updateDoc: async (ref, data) => {
-			await fetch(`/.netlify/functions/api-proxy?action=updateDoc&path=${encodeURIComponent(ref.path)}`, {
-				method: 'POST', body: JSON.stringify({ data })
+			const res = await fetch(`/.netlify/functions/api-proxy?action=updateDoc&path=${encodeURIComponent(ref.path)}`, {
+				method: 'POST', headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+				body: JSON.stringify({ data })
 			});
+			if (!res.ok) throw new Error("Keine Berechtigung");
 		},
 		deleteDoc: async (ref) => {
-			await fetch(`/.netlify/functions/api-proxy?action=deleteDoc&path=${encodeURIComponent(ref.path)}`, {
-				method: 'POST'
+			const res = await fetch(`/.netlify/functions/api-proxy?action=deleteDoc&path=${encodeURIComponent(ref.path)}`, {
+				method: 'POST', headers: getAuthHeader()
 			});
+			if (!res.ok) throw new Error("Keine Berechtigung");
 		},
 		onSnapshot: (ref, callback) => {
 			const isDoc = ref.path.includes('/');
-			const fetchFn = isDoc ? window.dbFunctions.getDoc : window.dbFunctions.getDocs;
+			const fetchFn = isDoc ? dbFunctions.getDoc : dbFunctions.getDocs;
 			
 			fetchFn(ref).then(callback);
 			setInterval(() => {
@@ -95,6 +110,7 @@
 	};
 
 	let isSavingGame = false;
+	let lastTournamentHash = null;
 
 	/**
 	 * ============================================================
@@ -682,16 +698,19 @@
 	async function authenticate(username, password) {
 		if (!username || !password) return false;
 		try {
-			const { doc, getDoc } = window.dbFunctions;
-			const ref = doc(window.db, CONFIG.USERS_COL, username);
-			const snap = await getDoc(ref);
-			if (snap.exists()) {
-				const inputHash = await hashPassword(password);
-				const dbPass = snap.data().password;
-				if (dbPass === inputHash) {
-					state.currentUser = { username, ...snap.data() };
+			const inputHash = await hashPassword(password);
+			const res = await fetch(`/.netlify/functions/api-proxy?action=login`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ username, hash: inputHash })
+			});
+			if (res.ok) {
+				const data = await res.json();
+				if (data.success) {
+					// NEU: Hash für API-Requests merken
+					state.currentUser = { username, hash: inputHash, isAdmin: data.isAdmin }; 
 					// Admin-Rolle prüfen
-					state.isAdmin = snap.data().isAdmin === true;
+					state.isAdmin = data.isAdmin === true;
 					return true;
 				}
 			}
@@ -919,8 +938,8 @@
 		const list = document.getElementById('userList');
 		if (!filter) list.innerHTML = '<p style="text-align:center; padding:20px;">Lade Benutzer...</p>';
 		try {
-			const { collection, getDocs } = window.dbFunctions;
-			const snap = await getDocs(collection(window.db, CONFIG.USERS_COL));
+			const { collection, getDocs } = dbFunctions;
+			const snap = await getDocs(collection(db, CONFIG.USERS_COL));
 			list.innerHTML = '';
 
 			const filteredDocs = snap.docs.filter(doc => doc.id.toLowerCase().includes(filter.toLowerCase()));
@@ -963,7 +982,7 @@
 			confirmText: "Löschen",
 			onConfirm: async () => {
 				try {
-					await window.dbFunctions.deleteDoc(window.dbFunctions.doc(window.db, CONFIG.USERS_COL, username));
+					await dbFunctions.deleteDoc(dbFunctions.doc(db, CONFIG.USERS_COL, username));
 					showToast("Benutzer gelöscht", "success");
 					loadUsers();
 				} catch (e) {
@@ -1294,10 +1313,13 @@
 
 	// Zeichnet die Verbindungslinien zwischen den Matches
 	function drawConnectors(svg, rounds, gradientId) {
+		if (!svg || !svg.parentElement || svg.parentElement.offsetParent === null) return;
+
 		const containerRect = svg.parentElement.getBoundingClientRect();
 		// Alle vorhandenen Pfade vorher entfernen, um Überlappungen zu vermeiden
 		const existingPaths = svg.querySelectorAll('path');
 		existingPaths.forEach(p => p.remove());
+
 		for (let roundIndex = 0; roundIndex < rounds.length - 1; roundIndex++) {
 			const currentRound = rounds[roundIndex];
 			const nextRound = rounds[roundIndex + 1];
@@ -1315,6 +1337,8 @@
 				const r1 = m1Node.getBoundingClientRect();
 				const r2 = m2Node.getBoundingClientRect();
 				const rN = nextNode.getBoundingClientRect();
+
+				if (!r1 || !r2 || !rN) continue;
 
 				const xRight = r1.right - containerRect.left;
 				const xLeftNext = rN.left - containerRect.left;
@@ -1349,6 +1373,8 @@
 					const thirdNode = nextRound.matches[1];
 					if (thirdNode) {
 						const r3 = thirdNode.getBoundingClientRect();
+						if (!r3) continue;
+
 						const y3 = r3.top - containerRect.top + r3.height / 2;
 						const path3rd = document.createElementNS('http://www.w3.org/2000/svg', 'path');
 						path3rd.setAttribute('class', 'bracket-line');
@@ -2157,8 +2183,8 @@
 					g.title.startsWith(`${m.player2} vs. ${m.player1}`)
 				);
 				if (plannedMatch) {
-					const { doc, deleteDoc } = window.dbFunctions;
-					await deleteDoc(doc(window.db, CONFIG.GAMES_COL, plannedMatch.id)).catch(err => console.error("Auto-delete failed:", err));
+					const { doc, deleteDoc } = dbFunctions;
+					await deleteDoc(doc(db, CONFIG.GAMES_COL, plannedMatch.id)).catch(err => console.error("Auto-delete failed:", err));
 				}
 			}
 
@@ -2171,11 +2197,12 @@
 
 	// Turnier Status in die Datenbank speichern
 	async function saveToCloud() {
-		if (!state.tournament || !window.dbFunctions) return;
-		const { doc, setDoc } = window.dbFunctions;
+		if (!state.tournament || !dbFunctions) return;
+		const { doc, setDoc } = dbFunctions;
 		const winnerObj = {}; state.tournament.winnerBracket.forEach((r, i) => winnerObj[`round_${i}`] = r);
 		const loserObj = {}; state.tournament.loserBracket.forEach((r, i) => loserObj[`round_${i}`] = r);
-		await setDoc(doc(window.db, CONFIG.DB_COL, CONFIG.DB_DOC), {
+		
+		const tournamentData = {
 			name: state.tournament.name, players: state.tournament.players,
 			stepladder: state.tournament.stepladder, winnerBracket: winnerObj,
 			loserBracket: loserObj, tournamentOver: state.tournament.tournamentOver,
@@ -2184,15 +2211,19 @@
 			groups: state.tournament.groups || [],
 			wbToLbMap: state.tournament.wbToLbMap || {},
 			matchIdCounter: state.tournament.matchIdCounter || 0
-		});
+		};
+
+		lastTournamentHash = JSON.stringify(tournamentData);
+
+		await setDoc(doc(db, CONFIG.DB_COL, CONFIG.DB_DOC), tournamentData);
 	}
 
 	// Speichert die globalen Assets (Regeln, Dartautomat)
 	async function saveAssetsToCloud() {
-		if (!window.dbFunctions) return;
+		if (!dbFunctions) return;
 		if (!requireAdmin()) return;
-		const { doc, setDoc } = window.dbFunctions;
-		await setDoc(doc(window.db, CONFIG.DB_COL, CONFIG.ASSETS_DOC), state.globalAssets || {});
+		const { doc, setDoc } = dbFunctions;
+		await setDoc(doc(db, CONFIG.DB_COL, CONFIG.ASSETS_DOC), state.globalAssets || {});
 	}
 
 	/**
@@ -2203,10 +2234,10 @@
 
 	// Archiviert das aktuelle Turnier
 	async function archiveTournament() {
-		if (!state.tournament || !window.dbFunctions) return;
+		if (!state.tournament || !dbFunctions) return;
 		if (!requireAdmin()) return;
 
-		const { doc, setDoc } = window.dbFunctions;
+		const { doc, setDoc } = dbFunctions;
 		const archiveId = `tournament_${Date.now()}`;
 
 		// Konvertiere Brackets für Speicherung
@@ -2231,7 +2262,7 @@
 			archivedAt: Date.now()
 		};
 
-		await setDoc(doc(window.db, CONFIG.ARCHIVES_COL, archiveId), archiveData);
+		await setDoc(doc(db, CONFIG.ARCHIVES_COL, archiveId), archiveData);
 		showToast("Turnier archiviert!", "success");
 	}
 
@@ -2244,8 +2275,8 @@
 			confirmText: "Endgültig Löschen",
 			onConfirm: async () => {
 				try {
-					const { doc, deleteDoc } = window.dbFunctions;
-					await deleteDoc(doc(window.db, CONFIG.ARCHIVES_COL, archiveId));
+					const { doc, deleteDoc } = dbFunctions;
+					await deleteDoc(doc(db, CONFIG.ARCHIVES_COL, archiveId));
 					showToast("Archiv gelöscht.", "success");
 					loadTournamentArchives();
 				} catch (e) {
@@ -2262,8 +2293,8 @@
 		list.innerHTML = '<p style="text-align:center; padding:20px;">Lade Archive...</p>';
 
 		try {
-			const { collection, getDocs } = window.dbFunctions;
-			const snap = await getDocs(collection(window.db, CONFIG.ARCHIVES_COL));
+			const { collection, getDocs } = dbFunctions;
+			const snap = await getDocs(collection(db, CONFIG.ARCHIVES_COL));
 
 			if (snap.empty) {
 				list.innerHTML = '<p style="text-align:center; padding:20px; color:var(--text-dim);">Keine archivierten Turniere gefunden.</p>';
@@ -2645,14 +2676,26 @@
 
 		// Live Syncronisation mit der Datenbank - Nun über unseren API-Mock!
 		const startSync = () => {
-			if (window.dbFunctions) {
+			if (dbFunctions) {
 				// Turnier Sync
-				window.dbFunctions.onSnapshot(window.dbFunctions.doc(window.db, CONFIG.DB_COL, CONFIG.DB_DOC), s => {
-					state.tournament = s.exists() ? TournamentManager.fromJSON(s.data()) : null; updateUI();
+				dbFunctions.onSnapshot(dbFunctions.doc(db, CONFIG.DB_COL, CONFIG.DB_DOC), s => {
+					if (s.exists()) {
+						const newData = s.data();
+						const newHash = JSON.stringify(newData);
+						if (newHash !== lastTournamentHash) {
+							lastTournamentHash = newHash;
+							state.tournament = TournamentManager.fromJSON(newData);
+							updateUI();
+						}
+					} else if (lastTournamentHash !== null) {
+						lastTournamentHash = null;
+						state.tournament = null;
+						updateUI();
+					}
 				});
 				// Assets Sync
-				window.dbFunctions.onSnapshot(window.dbFunctions.doc(window.db, CONFIG.DB_COL, CONFIG.ASSETS_DOC), s => {
-					state.globalAssets = s.exists() ? s.data() : {}; updateUI();
+				dbFunctions.onSnapshot(dbFunctions.doc(db, CONFIG.DB_COL, CONFIG.ASSETS_DOC), s => {
+					state.globalAssets = s.exists() ? s.data() : {};
 				});
 			} else setTimeout(startSync, 100);
 		};
@@ -2695,7 +2738,7 @@
 
 			try {
 				const hashedPassword = await hashPassword(p);
-				await window.dbFunctions.setDoc(window.dbFunctions.doc(window.db, CONFIG.USERS_COL, u), { password: hashedPassword, isAdmin: isAdminUser });
+				await dbFunctions.setDoc(dbFunctions.doc(db, CONFIG.USERS_COL, u), { password: hashedPassword, isAdmin: isAdminUser });
 				showToast(`Benutzer angelegt! ${isAdminUser ? '(Admin)' : '(Zuschauer)'}`, "success");
 				document.getElementById('newUserName').value = '';
 				document.getElementById('newUserPass').value = '';
@@ -2740,8 +2783,9 @@
 					message: "Diese Aktion kann nicht rückgängig gemacht werden!",
 					confirmText: "Endgültig Löschen",
 					onConfirm: async () => {
-						await window.dbFunctions.setDoc(window.dbFunctions.doc(window.db, CONFIG.DB_COL, CONFIG.DB_DOC), {});
+						await dbFunctions.setDoc(dbFunctions.doc(db, CONFIG.DB_COL, CONFIG.DB_DOC), {});
 						state.tournament = null;
+						lastTournamentHash = null;
 						updateUI();
 						showToast("Turnier gelöscht", "danger");
 					}
@@ -2838,8 +2882,11 @@
 				document.getElementById('shuffleToggle').checked,
 				hasGroups
 			);
-			await saveToCloud();
+
+			updateUI();
 			document.getElementById('setupSection').classList.remove('active');
+
+			await saveToCloud();
 		};
 
 		// Archive Button Event Listener
@@ -2932,8 +2979,8 @@
 		list.innerHTML = '<p style="text-align: center; color: var(--text-dim); padding: 20px;">Lade Formulare...</p>';
 
 		try {
-			const { collection, getDocs } = window.dbFunctions;
-			const snap = await getDocs(collection(window.db, CONFIG.FORMS_COL));
+			const { collection, getDocs } = dbFunctions;
+			const snap = await getDocs(collection(db, CONFIG.FORMS_COL));
 
 			state.activeForms = [];
 			snap.forEach(doc => {
@@ -3210,7 +3257,7 @@
 		}
 
 		try {
-			const { doc, setDoc } = window.dbFunctions;
+			const { doc, setDoc } = dbFunctions;
 			const responseId = 'resp_' + Date.now();
 			const responseData = {
 				formId: state.currentForm.id,
@@ -3220,7 +3267,7 @@
 				submittedAt: Date.now()
 			};
 
-			await setDoc(doc(window.db, CONFIG.RESPONSES_COL, responseId), responseData);
+			await setDoc(doc(db, CONFIG.RESPONSES_COL, responseId), responseData);
 
 			showToast("Vielen Dank für dein Feedback!", "success");
 			document.getElementById('feedbackFormModal').classList.remove('active');
@@ -3336,7 +3383,7 @@
 		}
 
 		try {
-			const { doc, setDoc } = window.dbFunctions;
+			const { doc, setDoc } = dbFunctions;
 			// Benutzt die bestehende ID zum bearbeiten
 			const formId = state.editingFormId ? state.editingFormId : 'form_' + Date.now();
 			const formData = {
@@ -3349,7 +3396,7 @@
 				questions
 			};
 
-			await setDoc(doc(window.db, CONFIG.FORMS_COL, formId), formData, { merge: true });
+			await setDoc(doc(db, CONFIG.FORMS_COL, formId), formData, { merge: true });
 
 			showToast(state.editingFormId ? "Formular aktualisiert!" : "Formular erstellt!", "success"); // Bestätigungs Benachrichtigung
 			document.getElementById('formBuilderModal').classList.remove('active');
@@ -3373,8 +3420,8 @@
 			confirmText: "Löschen",
 			onConfirm: async () => {
 				try {
-					const { doc, deleteDoc } = window.dbFunctions;
-					await deleteDoc(doc(window.db, CONFIG.FORMS_COL, formId));
+					const { doc, deleteDoc } = dbFunctions;
+					await deleteDoc(doc(db, CONFIG.FORMS_COL, formId));
 					showToast("Formular gelöscht.", "success"); // Bestätigungs Meldung
 					loadForms();
 				} catch (e) {
@@ -3389,8 +3436,8 @@
 	async function toggleFormStatus(formId, isActive) {
 		if (!requireAdmin()) return;
 		try {
-			const { doc, updateDoc } = window.dbFunctions;
-			await updateDoc(doc(window.db, CONFIG.FORMS_COL, formId), {
+			const { doc, updateDoc } = dbFunctions;
+			await updateDoc(doc(db, CONFIG.FORMS_COL, formId), {
 				active: !isActive
 			});
 			loadForms();
@@ -3450,8 +3497,8 @@
 		document.getElementById('responseViewerModal').classList.add('active');
 
 		try {
-			const { collection, getDocs, query, where } = window.dbFunctions;
-			const q = query(collection(window.db, CONFIG.RESPONSES_COL), where("formId", "==", formId));
+			const { collection, getDocs, query, where } = dbFunctions;
+			const q = query(collection(db, CONFIG.RESPONSES_COL), where("formId", "==", formId));
 			const snap = await getDocs(q);
 
 			if (snap.empty) {
@@ -3660,11 +3707,11 @@
 
 	async function openRegistrationModal() {
 		// Datenbank Check
-		if (!window.dbFunctions) {
+		if (!dbFunctions) {
 			showToast("Lade Datenbank... Bitte einen Moment Geduld.", "warning");
 			let checkCount = 0;
 			const waitForDb = async () => {
-				if (window.dbFunctions) {
+				if (dbFunctions) {
 					await openRegistrationModal();
 				} else if (checkCount < 20) {
 					checkCount++;
@@ -3686,17 +3733,17 @@
 		}
 
 		// User checkt Status
-		const { doc, getDoc, getDocs, collection } = window.dbFunctions;
+		const { doc, getDoc, getDocs, collection } = dbFunctions;
 		try {
 			document.getElementById('regOpenContent').classList.add('hidden');
 			document.getElementById('regClosedContent').classList.add('hidden');
 			document.getElementById('regModalTitle').textContent = "Lade Status...";
 			document.getElementById('registrationModal').classList.add('active');
 
-			const settingsSnap = await getDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
+			const settingsSnap = await getDoc(doc(db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
 			const settings = settingsSnap.exists() ? settingsSnap.data() : { active: false };
 
-			const regsSnap = await getDocs(collection(window.db, CONFIG.REGISTRATIONS_COL));
+			const regsSnap = await getDocs(collection(db, CONFIG.REGISTRATIONS_COL));
 			const currentCount = regsSnap.docs.filter(d => d.id !== CONFIG.REG_SETTINGS_DOC).length;
 
 			const now = Date.now();
@@ -3767,8 +3814,8 @@
 		}
 
 		try {
-			const { doc, setDoc, getDoc, getDocs, collection } = window.dbFunctions;
-			const settingsSnap = await getDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
+			const { doc, setDoc, getDoc, getDocs, collection } = dbFunctions;
+			const settingsSnap = await getDoc(doc(db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
 			const settings = settingsSnap.exists() ? settingsSnap.data() : { active: false };
 
 			if (!settings.active) {
@@ -3776,7 +3823,7 @@
 				return;
 			}
 
-			const regsSnap = await getDocs(collection(window.db, CONFIG.REGISTRATIONS_COL));
+			const regsSnap = await getDocs(collection(db, CONFIG.REGISTRATIONS_COL));
 			const currentCount = regsSnap.docs.filter(d => d.id !== CONFIG.REG_SETTINGS_DOC).length;
 
 			if (currentCount >= (settings.maxParticipants || Infinity)) {
@@ -3785,7 +3832,7 @@
 			}
 
 			const regId = 'reg_' + Date.now();
-			await setDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, regId), {
+			await setDoc(doc(db, CONFIG.REGISTRATIONS_COL, regId), {
 				nickname: encryptName(nickname),
 				registeredAt: Date.now()
 			});
@@ -3801,16 +3848,16 @@
 
 	async function loadRegistrationSettings() {
 		if (!requireAdmin()) return;
-		const { doc, getDoc, getDocs, collection } = window.dbFunctions;
+		const { doc, getDoc, getDocs, collection } = dbFunctions;
 		try {
-			const settingsSnap = await getDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
+			const settingsSnap = await getDoc(doc(db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
 			const settings = settingsSnap.exists() ? settingsSnap.data() : { active: false, maxParticipants: 32 };
 
 			document.getElementById('regActiveToggle').checked = settings.active;
 			document.getElementById('regDeadlineInput').value = settings.deadline || "";
 			document.getElementById('regMaxParticipants').value = settings.maxParticipants || 32;
 
-			const regsSnap = await getDocs(collection(window.db, CONFIG.REGISTRATIONS_COL));
+			const regsSnap = await getDocs(collection(db, CONFIG.REGISTRATIONS_COL));
 			const count = regsSnap.docs.filter(d => d.id !== CONFIG.REG_SETTINGS_DOC).length;
 
 			document.getElementById('regCurrentCount').textContent = count;
@@ -3828,8 +3875,8 @@
 		const maxParticipants = parseInt(document.getElementById('regMaxParticipants').value) || 32;
 
 		try {
-			const { doc, setDoc } = window.dbFunctions;
-			await setDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC), {
+			const { doc, setDoc } = dbFunctions;
+			await setDoc(doc(db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC), {
 				active,
 				deadline,
 				maxParticipants
@@ -3848,8 +3895,8 @@
 		list.innerHTML = '<p style="text-align:center; padding:10px;">Lade Liste...</p>';
 
 		try {
-			const { collection, getDocs, deleteDoc, doc } = window.dbFunctions;
-			const snap = await getDocs(collection(window.db, CONFIG.REGISTRATIONS_COL));
+			const { collection, getDocs, deleteDoc, doc } = dbFunctions;
+			const snap = await getDocs(collection(db, CONFIG.REGISTRATIONS_COL));
 
 			const regs = snap.docs
 				.filter(d => d.id !== CONFIG.REG_SETTINGS_DOC)
@@ -3881,7 +3928,7 @@
 						message: `Möchtest du die Anmeldung von ${displayName} wirklich entfernen?`,
 						confirmText: "Löschen",
 						onConfirm: async () => {
-							await deleteDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, reg.id));
+							await deleteDoc(doc(db, CONFIG.REGISTRATIONS_COL, reg.id));
 							showToast("Anmeldung entfernt", "success");
 							viewRegistrationList();
 							loadRegistrationSettings();
@@ -3949,18 +3996,18 @@
 		}
 
 		// Live Syncronisation der Spiele
-		if (window.dbFunctions) {
-			const { collection, onSnapshot, query } = window.dbFunctions;
-			onSnapshot(collection(window.db, CONFIG.GAMES_COL), (snapshot) => {
+		if (dbFunctions) {
+			const { collection, onSnapshot, query } = dbFunctions;
+			onSnapshot(collection(db, CONFIG.GAMES_COL), (snapshot) => {
 				state.plannedGames = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
 				// Spiele von vergangenen Tagen löschen
 				const today = new Date().toISOString().split('T')[0];
-				const { doc, deleteDoc } = window.dbFunctions;
+				const { doc, deleteDoc } = dbFunctions;
 				state.plannedGames.forEach(async (game) => {
 					if (game.date < today) {
 						console.log("Cleanup: Lösche veraltetes Spiel:", game.title, game.date);
-						await deleteDoc(doc(window.db, CONFIG.GAMES_COL, game.id)).catch(e => console.error(e));
+						await deleteDoc(doc(db, CONFIG.GAMES_COL, game.id)).catch(e => console.error(e));
 					}
 				});
 
@@ -4319,9 +4366,9 @@
 
 		isSavingGame = true;
 		try {
-			const { doc, setDoc } = window.dbFunctions;
+			const { doc, setDoc } = dbFunctions;
 			const id = 'game_' + Date.now();
-			await setDoc(doc(window.db, CONFIG.GAMES_COL, id), {
+			await setDoc(doc(db, CONFIG.GAMES_COL, id), {
 				date,
 				time,
 				duration,
@@ -4352,8 +4399,8 @@
 			confirmText: "Löschen",
 			onConfirm: async () => {
 				try {
-					const { doc, deleteDoc } = window.dbFunctions;
-					await deleteDoc(doc(window.db, CONFIG.GAMES_COL, id));
+					const { doc, deleteDoc } = dbFunctions;
+					await deleteDoc(doc(db, CONFIG.GAMES_COL, id));
 					showToast("Spiel gelöscht.", "success");
 				} catch (e) {
 					console.error(e);
