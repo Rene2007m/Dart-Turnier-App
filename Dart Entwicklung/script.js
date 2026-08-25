@@ -6,7 +6,8 @@
 		return { 'Authorization': `${state.currentUser.username}:${state.currentUser.hash}` };
 	};
 
-	const dbFunctions = {
+	window.db = db;
+	window.dbFunctions = {
 		doc: (db, col, id) => {
 			if (typeof col === 'object') return { path: col.path + '/' + id };
 			if (id) return { path: col + '/' + id };
@@ -61,15 +62,35 @@
 		},
 		onSnapshot: (ref, callback) => {
 			const isDoc = ref.path.includes('/');
-			const fetchFn = isDoc ? dbFunctions.getDoc : dbFunctions.getDocs;
+			const fetchFn = isDoc ? window.dbFunctions.getDoc : window.dbFunctions.getDocs;
 			
-			fetchFn(ref).then(callback);
-			setInterval(() => {
-				fetchFn(ref).then(callback);
-			}, 10000);
+			const executeFetch = () => {
+				if (!isLocalUpdatePending) {
+					fetchFn(ref).then(callback);
+				}
+			};
+
+			// Erstes Ausführen direkt beim Aufruf
+			executeFetch();
+
+			// Kapselung des Intervalls pro Snapshot, damit sie sich nicht stören
+			let interval = null;
+			const updateInterval = () => {
+				if (interval) clearInterval(interval);
+				// Automatischer Timer läuft nun dauerhaft im Hintergrund (30 Sekunden)
+				interval = setInterval(executeFetch, 30000); 
+			};
+			
+			updateInterval();
+
+			// Wenn der Tab fokussiert wird: Einmaliges Update ohne neuen Timer zu erzeugen
+			document.addEventListener('visibilitychange', () => {
+				if (document.visibilityState === 'visible' && !isLocalUpdatePending) {
+					executeFetch();
+				}
+			});
 		}
 	};
-	// ----------------------------------------
 
 	/**
 	 * ============================================================
@@ -77,22 +98,20 @@
 	 * ============================================================
 	 */
 
-	// Datenbank Namen
 	const CONFIG = {
-		DB_COL: "tournaments",  // Turnier Sammlung
-		DB_DOC: "active_tournament", // Turnier Dokument
-		ASSETS_DOC: "global_assets", // Globale Assets (Regeln, Dartautomat)
-		USERS_COL: "users", // User Sammlung
-		ADMIN_COL: "Admin", // Admin Sammlung
-		ARCHIVES_COL: "tournament_archives", // Archivierte Turniere
-		FORMS_COL: "forms", // Feedback Formulare
-		RESPONSES_COL: "responses", // Feedback Antworten
-		REGISTRATIONS_COL: "registrations", // Turnieranmeldungen
-		REG_SETTINGS_DOC: "registration_settings", // Einstellungen für Anmeldung
-		GAMES_COL: "planned_games" // Geplante Spiele
+		DB_COL: "tournaments",
+		DB_DOC: "active_tournament",
+		ASSETS_DOC: "global_assets",
+		USERS_COL: "users",
+		ADMIN_COL: "Admin",
+		ARCHIVES_COL: "tournament_archives",
+		FORMS_COL: "forms",
+		RESPONSES_COL: "responses",
+		REGISTRATIONS_COL: "registrations",
+		REG_SETTINGS_DOC: "registration_settings",
+		GAMES_COL: "planned_games"
 	};
 
-	// aktuelle Zustand der App
 	let state = {
 		isAdmin: false,
 		tournament: null,
@@ -110,7 +129,16 @@
 	};
 
 	let isSavingGame = false;
-	let lastTournamentHash = null;
+	let isLocalUpdatePending = false;
+	let localUpdateTimer = null;
+
+	function triggerLocalUpdatePause(duration = 2000) {
+		isLocalUpdatePending = true;
+		if (localUpdateTimer) clearTimeout(localUpdateTimer);
+		localUpdateTimer = setTimeout(() => {
+			isLocalUpdatePending = false;
+		}, duration);
+	}
 
 	/**
 	 * ============================================================
@@ -118,7 +146,6 @@
 	 * ============================================================
 	 */
 
-	// Prüft ob der aktuelle User Admin-Rechte hat
 	function requireAdmin() {
 		if (!state.isAdmin) {
 			showToast("Zugriff verweigert: Admin-Rechte erforderlich!", "danger");
@@ -128,13 +155,11 @@
 		return true;
 	}
 
-	// Führt eine administrative Aktion aus, sofern Admin-Rechte vorliegen
 	async function verifyAdminAction(onSuccess) {
 		if (!requireAdmin()) return;
 		onSuccess();
 	}
 
-	// Hash generierung
 	async function hashPassword(password) {
 		const msgUint8 = new TextEncoder().encode(password);
 		const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
@@ -142,7 +167,6 @@
 		return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 	}
 
-	// Verschlüsselung für Namen
 	const CRYPTO_KEY = "dart_pro_2026_secure";
 	function encryptName(text) {
 		if (!text) return "";
@@ -167,7 +191,6 @@
 	 * ============================================================
 	 */
 
-	//Zeigt Info Meldungen am oberen Bildschirmrand an
 	function showToast(message, type = 'primary') {
 		const container = document.getElementById('toastContainer');
 		const toast = document.createElement('div');
@@ -175,14 +198,12 @@
 		toast.innerHTML = `<span>${message}</span>`;
 		container.appendChild(toast);
 
-		// Automatisch nach 3 Sekunden ausblenden und löschen
 		setTimeout(() => {
 			toast.style.animation = 'fadeOut 0.3s ease forwards';
 			setTimeout(() => toast.remove(), 300);
 		}, 3000);
 	}
 
-	// Zeigt ein Bestätigungs Fenser (für wichtige Aktionen)
 	function showCustomDialog({ title, message, showCancel = true, confirmText = 'OK', cancelText = 'Abbrechen', onConfirm, customContent = null }) {
 		const modal = document.getElementById('customDialog');
 		document.getElementById('dialogTitle').textContent = title;
@@ -194,7 +215,6 @@
 		customDiv.innerHTML = '';
 		if (customContent) customDiv.appendChild(customContent);
 
-		// Beim Klicken auf Bestätigen: Funktion ausführen und Fenster schließen
 		confirmBtn.textContent = confirmText;
 		cancelBtn.textContent = cancelText;
 		cancelBtn.style.display = showCancel ? 'block' : 'none';
@@ -209,24 +229,23 @@
 
 	/**
 	 * ============================================================
-	 * 3. DAS TOURNAMENT-MANAGER OBJEKT (Logik)
+	 * 3. TOURNAMENT-MANAGER OBJEKT
 	 * ============================================================
 	 */
 
 	class TournamentManager {
 		constructor(name, players, shouldShuffle, hasGroups = false) {
 			this.name = name;
-			// Vearbeitet die Spielerliste (Mischen und aufüllen mit Freilosen)
 			this.players = this.processPlayers(players, shouldShuffle);
-			this.winnerBracket = []; // Gewinner Baum
-			this.loserBracket = []; // Verlierer Baum
-			this.stepladder = []; // Top 3 Finale
-			this.news = []; // Turnier News Feed
-			this.hasGroups = hasGroups; // Ob Gruppenphase aktiviert ist
-			this.groups = []; // Gruppen-Einteilung
-			this.matchIdCounter = 0; // Eindeutige ID für jedes Match
-			this.tournamentOver = false; // Ist das Turnier beendet
-			this.wbToLbMap = {}; // Merkt sich welche Verlierer wohin im LB kommen
+			this.winnerBracket = [];
+			this.loserBracket = [];
+			this.stepladder = [];
+			this.news = [];
+			this.hasGroups = hasGroups;
+			this.groups = [];
+			this.matchIdCounter = 0;
+			this.tournamentOver = false;
+			this.wbToLbMap = {};
 			this.initializeBrackets();
 			if (this.hasGroups) {
 				this.generateGroups();
@@ -240,7 +259,6 @@
 			const groupTitles = ['Gruppe A', 'Gruppe B', 'Gruppe C', 'Gruppe D', 'Gruppe E', 'Gruppe F', 'Gruppe G', 'Gruppe H'];
 			this.groups = groupTitles.map(title => ({ title, members: [], matches: [] }));
 
-			// Zufälliges Mischen
 			for (let i = realPlayers.length - 1; i > 0; i--) {
 				const j = Math.floor(Math.random() * (i + 1));
 				[realPlayers[i], realPlayers[j]] = [realPlayers[j], realPlayers[i]];
@@ -250,7 +268,6 @@
 				this.groups[idx % this.groups.length].members.push(player);
 			});
 
-			// Generiere Jeder-gegen-Jeden Matches für jede Gruppe
 			this.groups.forEach(group => {
 				const m = group.members;
 				for (let i = 0; i < m.length; i++) {
@@ -261,11 +278,8 @@
 			});
 		}
 
-		// Befüllt Gold und Bronze Runde aus den Gruppenergebnissen
 		populateBracketsFromGroups() {
 			if (!this.hasGroups || !this.groups || this.groups.length === 0) return;
-
-			// Prüfen ob bereits befüllt
 			if (this.winnerBracket[0] && this.winnerBracket[0].some(m => m.player1 || m.player2)) return;
 
 			const rank1Players = [];
@@ -310,7 +324,6 @@
 				if (sorted[3]) rank4Players.push(sorted[3].name);
 			});
 
-			// Mischt Array zufällig (Fisher-Yates)
 			const shuffle = (arr) => {
 				for (let i = arr.length - 1; i > 0; i--) {
 					const j = Math.floor(Math.random() * (i + 1));
@@ -319,7 +332,6 @@
 				return arr;
 			};
 
-			// Gold-Runde (Plätze 1 & 2): Zufällige Paarungen Rank1 vs Rank2 (niemals Rank1 vs Rank1)
 			shuffle(rank1Players);
 			shuffle(rank2Players);
 
@@ -335,7 +347,6 @@
 			}
 			shuffle(goldMatches);
 
-			// Gold Runde 1 neu aufbauen
 			const goldRound1 = [];
 			goldMatches.forEach(m => {
 				goldRound1.push(this.createMatch(0, m.p1, m.p2, 'winner'));
@@ -348,7 +359,6 @@
 			this.winnerBracket = [goldRound1];
 			this.createWBRounds();
 
-			// Bronze-Runde (Plätze 3 & 4): Zufällige Paarungen Rank3 vs Rank4
 			shuffle(rank3Players);
 			shuffle(rank4Players);
 
@@ -380,14 +390,12 @@
 			this.checkAllByeMatches();
 		}
 
-		// Hilfsfunktion: Erkennt ob ein Platz ein Freilos ist
 		static isBye(p) {
 			if (!p) return false;
 			const s = String(p).toUpperCase().trim();
 			return s === 'BYE' || s === 'FREILOS';
 		}
 
-		// Bereitet die Spielerliste vor (2er-Potenz: 4,8,16,32 Spieler)
 		processPlayers(players, shouldShuffle) {
 			if (!shouldShuffle) {
 				let res = [...players];
@@ -425,7 +433,6 @@
 			return result;
 		}
 
-		// Erstellt die Grundstruktur der Brackets (Runde1 bis Finale)
 		initializeBrackets() {
 			const firstRound = [];
 			const wbSlots = this.hasGroups ? Math.ceil(this.players.length / 2) : this.players.length;
@@ -496,7 +503,6 @@
 			this.checkAllByeMatches();
 		}
 
-		// Prüft ob ein Match gegen ein Freilos stattfindet
 		checkAllByeMatches() {
 			const processMatch = (m) => {
 				if (m.completed && !m.winner && (TournamentManager.isBye(m.player1) || TournamentManager.isBye(m.player2))) {
@@ -661,7 +667,7 @@
 
 	/**
 	 * ============================================================
-	 * 4. AUTHENTIFIZIERUNG (LOGINS)
+	 * 4. AUTHENTIFIZIERUNG
 	 * ============================================================
 	 */
 
@@ -688,7 +694,7 @@
 
 	/**
 	 * ============================================================
-	 * 5. UI-RENDERING (DIE DARSTELLUNG AUF DER SEITE)
+	 * 5. UI-RENDERING
 	 * ============================================================
 	 */
 
@@ -741,38 +747,34 @@
 		});
 	}
 
-	// Zeichnet alle UI-Elemente auf den aktuellen Zustand
 	function updateUI() {
 		const loginOverlay = document.getElementById('fullPageLogin');
 		const mainApp = document.getElementById('mainAppContainer');
-
 		if (state.currentUser) { loginOverlay.classList.add('hidden'); mainApp.classList.remove('hidden'); }
 		else { loginOverlay.classList.remove('hidden'); mainApp.classList.add('hidden'); return; }
 
 		const isAdmin = state.isAdmin;
 		document.getElementById('adminBadge').textContent = isAdmin ? `👑 Admin (${state.currentUser.username})` : `👤 Zuschauer (${state.currentUser.username})`;
 
-		// Admin Buttons
 		document.getElementById('newTournamentBtn').classList.toggle('hidden', !isAdmin);
 		document.getElementById('deleteTournamentBtn').classList.toggle('hidden', !isAdmin || !state.tournament);
 		document.getElementById('userMgmtBtn').classList.toggle('hidden', !isAdmin);
 		document.getElementById('adminLogoutBtn').classList.remove('hidden');
 		document.getElementById('participantsBtn').classList.toggle('hidden', !state.tournament);
 
-		// Tab Buttons & Abschnitte abfragen
-		const groupsTabBtn = document.querySelector('.tab-btn[data-tab="groupsSection"]');
-		const wbTabBtn = document.querySelector('.tab-btn[data-tab="winnerBracket"]');
-		const lbTabBtn = document.querySelector('.tab-btn[data-tab="loserBracket"]');
-		const stepladderTabBtn = document.querySelector('.tab-btn[data-tab="stepladderBracket"]');
-
 		if (state.tournament) {
 			document.getElementById('dashboardTitle').textContent = state.tournament.name;
-			
+			document.getElementById('tournamentSection').classList.remove('hidden');
 			renderBracket('winnerBracket'); renderBracket('loserBracket'); renderStepladder(); renderNews();
 			if (state.tournament.hasGroups) renderGroups();
 
 			const groupsAdmin = document.getElementById('groupsAdminControls');
 			if (groupsAdmin) groupsAdmin.classList.toggle('hidden', !isAdmin);
+
+			const groupsTabBtn = document.querySelector('.tab-btn[data-tab="groupsSection"]');
+			const wbTabBtn = document.querySelector('.tab-btn[data-tab="winnerBracket"]');
+			const lbTabBtn = document.querySelector('.tab-btn[data-tab="loserBracket"]');
+			const stepladderTabBtn = document.querySelector('.tab-btn[data-tab="stepladderBracket"]');
 
 			const hasGroups = state.tournament.hasGroups === true;
 			if (groupsTabBtn) {
@@ -836,75 +838,51 @@
 			}
 
 			const rankingSec = document.getElementById('rankingSection');
-			if (rankingSec) {
-				if (state.tournament.tournamentOver) {
-					rankingSec.classList.remove('hidden');
-					const pod = calculatePodium(state.tournament);
-					
-					if (pod.isGroup) {
-						rankingSec.innerHTML = `
-							<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
-							<div style="display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;">
-								<div style="flex: 1; min-width: 300px;">
-									<h4 style="text-align: center; color: gold; margin-bottom: 10px;">🥇 Gold Runde</h4>
-									<div class="podium">
-										<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.gold[1]}</div></div>
-										<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.gold[0]}</div></div>
-										<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.gold[2]}</div></div>
-									</div>
-								</div>
-								<div style="flex: 1; min-width: 300px;">
-									<h4 style="text-align: center; color: #cd7f32; margin-bottom: 10px;">🥇 Silber Runde</h4>
-									<div class="podium">
-										<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.bronze[1]}</div></div>
-										<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.bronze[0]}</div></div>
-										<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.bronze[2]}</div></div>
-									</div>
+			if (state.tournament.tournamentOver) {
+				rankingSec.classList.remove('hidden');
+				const pod = calculatePodium(state.tournament);
+				
+				if (pod.isGroup) {
+					rankingSec.innerHTML = `
+						<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
+						<div style="display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;">
+							<div style="flex: 1; min-width: 300px;">
+								<h4 style="text-align: center; color: gold; margin-bottom: 10px;">🥇 Gold Runde</h4>
+								<div class="podium">
+									<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.gold[1]}</div></div>
+									<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.gold[0]}</div></div>
+									<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.gold[2]}</div></div>
 								</div>
 							</div>
-						`;
-					} else {
-						rankingSec.innerHTML = `
-							<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
-							<div class="podium">
-								<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.single[1]}</div></div>
-								<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.single[0]}</div></div>
-								<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.single[2]}</div></div>
+							<div style="flex: 1; min-width: 300px;">
+								<h4 style="text-align: center; color: #cd7f32; margin-bottom: 10px;">🥇 Silber Runde</h4>
+								<div class="podium">
+									<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.bronze[1]}</div></div>
+									<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.bronze[0]}</div></div>
+									<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.bronze[2]}</div></div>
+								</div>
 							</div>
-						`;
-					}
+						</div>
+					`;
 				} else {
-					rankingSec.classList.add('hidden');
+					rankingSec.innerHTML = `
+						<h3 style="text-align: center; margin-bottom: 20px;">🏆 Endstand 🏆</h3>
+						<div class="podium">
+							<div class="podium-item second"><div class="rank">2</div><div class="player-name">${pod.single[1]}</div></div>
+							<div class="podium-item first"><div class="rank">1</div><div class="player-name">${pod.single[0]}</div></div>
+							<div class="podium-item third"><div class="rank">3</div><div class="player-name">${pod.single[2]}</div></div>
+						</div>
+					`;
 				}
+			} else {
+				rankingSec.classList.add('hidden');
 			}
-		} else {
-			// KEIN TURNIER AKTIV: Nur die Turnier-Tabs ausblenden & automatisch auf den "Home"-Tab schalten
-			document.getElementById('dashboardTitle').textContent = "Dart Turnier Dashboard";
-			
-			if (groupsTabBtn) groupsTabBtn.classList.add('hidden');
-			if (wbTabBtn) wbTabBtn.classList.add('hidden');
-			if (lbTabBtn) lbTabBtn.classList.add('hidden');
-			if (stepladderTabBtn) stepladderTabBtn.classList.add('hidden');
-
-			// Aktiven Tab auf Home zurücksetzen
-			document.querySelectorAll('.tab-btn, .tab-content').forEach(el => el.classList.remove('active'));
-			const homeTabBtn = document.querySelector('.tab-btn[data-tab="homeSection"]');
-			const homeTabContent = document.getElementById('homeSection');
-			if (homeTabBtn) homeTabBtn.classList.add('active');
-			if (homeTabContent) homeTabContent.classList.add('active');
-
-			const rankingSec = document.getElementById('rankingSection');
-			if (rankingSec) rankingSec.classList.add('hidden');
 		}
 
-		// Aktualisiert die Info Knöpfe
 		document.getElementById('rulesBtn').onclick = () => showInfoContent(state.globalAssets?.rules);
 		document.getElementById('machineBtn').onclick = () => showInfoContent(state.globalAssets?.machine);
-
-		// Admin-spezifische Elemente ein-/ausblenden
 		document.querySelectorAll('.admin-only').forEach(el => el.classList.toggle('hidden', !isAdmin));
 
-		// Admin Registrierungs-Button im Dashboard 
 		const regBtn = document.getElementById('registrationBtn');
 		if (regBtn) regBtn.classList.toggle('hidden', !isAdmin);
 	}
@@ -914,8 +892,8 @@
 		const list = document.getElementById('userList');
 		if (!filter) list.innerHTML = '<p style="text-align:center; padding:20px;">Lade Benutzer...</p>';
 		try {
-			const { collection, getDocs } = dbFunctions;
-			const snap = await getDocs(collection(db, CONFIG.USERS_COL));
+			const { collection, getDocs } = window.dbFunctions;
+			const snap = await getDocs(collection(window.db, CONFIG.USERS_COL));
 			list.innerHTML = '';
 
 			const filteredDocs = snap.docs.filter(doc => doc.id.toLowerCase().includes(filter.toLowerCase()));
@@ -957,7 +935,7 @@
 			confirmText: "Löschen",
 			onConfirm: async () => {
 				try {
-					await dbFunctions.deleteDoc(dbFunctions.doc(db, CONFIG.USERS_COL, username));
+					await window.dbFunctions.deleteDoc(window.dbFunctions.doc(window.db, CONFIG.USERS_COL, username));
 					showToast("Benutzer gelöscht", "success");
 					loadUsers();
 				} catch (e) {
@@ -1036,7 +1014,7 @@
 
 	/**
 	 * ============================================================
-	 * 6. ASSET-UPLOAD (BILDER & REGEL-TEXTE)
+	 * 6. ASSET-UPLOAD
 	 * ============================================================
 	 */
 
@@ -1132,7 +1110,7 @@
 		if (state.isAdmin) adminPanel.classList.remove('hidden');
 		else adminPanel.classList.add('hidden');
 
-		const news = state.tournament.news || [];
+		const news = (state.tournament && state.tournament.news) ? state.tournament.news : [];
 		const sortedNews = [...news].sort((a, b) => {
 			if (a.pinned && !b.pinned) return -1;
 			if (!a.pinned && b.pinned) return 1;
@@ -1181,6 +1159,12 @@
 
 		if (!content || !title) { showToast("Bitte Titel und Inhalt eingeben.", "danger"); return; }
 
+		triggerLocalUpdatePause();
+
+		if (!state.tournament) {
+			state.tournament = new TournamentManager("Aktuelles Turnier", [], false);
+		}
+
 		if (!state.tournament.news) state.tournament.news = [];
 		const newPost = {
 			id: 'news_' + Date.now(),
@@ -1190,13 +1174,17 @@
 			pinned: false
 		};
 		state.tournament.news.push(newPost);
-		updateUI();
+		renderNews();
 		await saveToCloud();
 		titleInput.value = '';
 		contentInput.value = '';
 	};
 
 	window.addSystemNews = async (title, content, shouldSave = true) => {
+		triggerLocalUpdatePause();
+		if (!state.tournament) {
+			state.tournament = new TournamentManager("Aktuelles Turnier", [], false);
+		}
 		if (!state.tournament.news) state.tournament.news = [];
 		const newPost = {
 			id: 'news_' + Date.now(),
@@ -1207,10 +1195,8 @@
 			system: true
 		};
 		state.tournament.news.push(newPost);
-		if (shouldSave) {
-			updateUI();
-			await saveToCloud();
-		}
+		renderNews();
+		if (shouldSave) await saveToCloud();
 	};
 
 	window.deleteNews = async (id) => {
@@ -1220,8 +1206,11 @@
 			message: "Möchtest du diese Nachricht wirklich löschen?",
 			confirmText: "Löschen",
 			onConfirm: async () => {
-				state.tournament.news = state.tournament.news.filter(n => n.id !== id);
-				updateUI();
+				triggerLocalUpdatePause();
+				if (state.tournament && state.tournament.news) {
+					state.tournament.news = state.tournament.news.filter(n => n.id !== id);
+				}
+				renderNews();
 				await saveToCloud();
 				showToast("Nachricht gelöscht", "success");
 			}
@@ -1230,14 +1219,18 @@
 
 	window.pinNews = async (id) => {
 		if (!requireAdmin()) return;
-		const post = state.tournament.news.find(n => n.id === id);
-		if (post) post.pinned = !post.pinned;
-		updateUI();
+		triggerLocalUpdatePause();
+		if (state.tournament && state.tournament.news) {
+			const post = state.tournament.news.find(n => n.id === id);
+			if (post) post.pinned = !post.pinned;
+		}
+		renderNews();
 		await saveToCloud();
 	};
 
 	window.editNews = async (id) => {
 		if (!requireAdmin()) return;
+		if (!state.tournament || !state.tournament.news) return;
 		const post = state.tournament.news.find(n => n.id === id);
 		if (!post) return;
 
@@ -1261,9 +1254,10 @@
 			title: "Nachricht bearbeiten",
 			customContent: wrapper,
 			onConfirm: async () => {
+				triggerLocalUpdatePause();
 				post.title = titleIn.value;
 				post.content = contentIn.value;
-				updateUI();
+				renderNews();
 				await saveToCloud();
 				showToast("Nachricht aktualisiert", "success");
 			}
@@ -1278,7 +1272,6 @@
 
 	function drawConnectors(svg, rounds, gradientId) {
 		if (!svg || !svg.parentElement || svg.parentElement.offsetParent === null) return;
-
 		const containerRect = svg.parentElement.getBoundingClientRect();
 		const existingPaths = svg.querySelectorAll('path');
 		existingPaths.forEach(p => p.remove());
@@ -1300,8 +1293,6 @@
 				const r1 = m1Node.getBoundingClientRect();
 				const r2 = m2Node.getBoundingClientRect();
 				const rN = nextNode.getBoundingClientRect();
-
-				if (!r1 || !r2 || !rN) continue;
 
 				const xRight = r1.right - containerRect.left;
 				const xLeftNext = rN.left - containerRect.left;
@@ -1336,8 +1327,6 @@
 					const thirdNode = nextRound.matches[1];
 					if (thirdNode) {
 						const r3 = thirdNode.getBoundingClientRect();
-						if (!r3) continue;
-
 						const y3 = r3.top - containerRect.top + r3.height / 2;
 						const path3rd = document.createElementNS('http://www.w3.org/2000/svg', 'path');
 						path3rd.setAttribute('class', 'bracket-line');
@@ -1372,21 +1361,22 @@
 
 	const SETTINGS_KEY = 'dartTurnierSettings';
 	const SETTINGS_DEFAULTS = {
-		bracketStyle: 'classic', 
-		accentColor: 'blue',     
-		compact: false,      
-		connectors: true,       
-		newsRefresh: false,      
-		showTileLabels: false     
+		bracketStyle: 'classic',
+		accentColor: 'blue',
+		compact: false,
+		connectors: true,
+		showTileLabels: false
 	};
 
 	let appSettings = { ...SETTINGS_DEFAULTS };
-	let newsRefreshInterval = null;
 
 	function loadSettings() {
 		try {
 			const saved = localStorage.getItem(SETTINGS_KEY);
-			if (saved) appSettings = { ...SETTINGS_DEFAULTS, ...JSON.parse(saved) };
+			if (saved) {
+				const parsed = JSON.parse(saved);
+				appSettings = { ...SETTINGS_DEFAULTS, ...parsed };
+			}
 		} catch (e) {
 			console.warn('Settings konnten nicht geladen werden:', e);
 			appSettings = { ...SETTINGS_DEFAULTS };
@@ -1414,10 +1404,8 @@
 		body.classList.toggle('no-connectors', !appSettings.connectors);
 		body.classList.toggle('show-tile-labels', appSettings.showTileLabels);
 
-		if (newsRefreshInterval) { clearInterval(newsRefreshInterval); newsRefreshInterval = null; }
-		if (appSettings.newsRefresh) {
-			newsRefreshInterval = setInterval(() => { if (state.tournament) renderNews(); }, 30000);
-		}
+		// Event feuern, damit Intervalle sich an die neuen Einstellungen anpassen
+		window.dispatchEvent(new Event('sync-settings-changed'));
 	}
 
 	function openSettingsModal() {
@@ -1430,7 +1418,6 @@
 
 		document.getElementById('settingCompact').checked = appSettings.compact;
 		document.getElementById('settingConnectors').checked = appSettings.connectors;
-		document.getElementById('settingNewsRefresh').checked = appSettings.newsRefresh;
 		document.getElementById('settingTileLabels').checked = appSettings.showTileLabels;
 
 		document.querySelectorAll('.settings-nav-item').forEach(b => b.classList.remove('active'));
@@ -1452,7 +1439,6 @@
 
 		appSettings.compact = document.getElementById('settingCompact').checked;
 		appSettings.connectors = document.getElementById('settingConnectors').checked;
-		appSettings.newsRefresh = document.getElementById('settingNewsRefresh').checked;
 		appSettings.showTileLabels = document.getElementById('settingTileLabels').checked;
 
 		saveSettings();
@@ -1542,7 +1528,7 @@
                 <div class="match-vs">vs</div>
                 <div class="match-player ${m.winner === m.player2 && m.completed ? 'winner' : (m.loser === m.player2 && m.completed ? 'loser' : '')}"><span>${m.player2 || 'TBD'}</span><span class="match-score">${m.score1 === 0 && m.score2 === 0 && m.completed && isP2B ? '' : m.score2}</span></div>`;
 				if (state.isAdmin && m.player1 && m.player2 && !isP1B && !isP2B) div.onclick = () => openMatch(m);
-				
+
 				const scheduleInfo = (!isPureBye && m.player1 && m.player2 && !isP1B && !isP2B) ? getScheduledGameInfo(m.player1, m.player2) : null;
 				const schedDiv = document.createElement('div');
 				if (!m.completed && !isPureBye && m.player1 && m.player2 && !isP1B && !isP2B) {
@@ -1559,8 +1545,10 @@
 			});
 			col.appendChild(matchesContainer); container.appendChild(col); rounds.push({ col, matches: matchElements });
 		});
-		setTimeout(() => drawConnectors(svg, rounds, gradientId), 50);
-		setTimeout(() => drawConnectors(svg, rounds, gradientId), 300);
+		if (container.offsetParent !== null) {
+			setTimeout(() => drawConnectors(svg, rounds, gradientId), 50);
+			setTimeout(() => drawConnectors(svg, rounds, gradientId), 300);
+		}
 	}
 
 	function renderStepladder() {
@@ -1573,6 +1561,7 @@
             <div class="match-player ${m.winner === m.player1 && m.completed ? 'winner' : (m.loser === m.player1 && m.completed ? 'loser' : '')}"><span>${m.player1 || 'TBD'}</span><span class="match-score">${m.score1}</span></div>
             <div class="match-vs">vs</div>
             <div class="match-player ${m.winner === m.player2 && m.completed ? 'winner' : (m.loser === m.player2 && m.completed ? 'loser' : '')}"><span>${m.player2 || 'TBD'}</span><span class="match-score">${m.score2}</span></div>`;
+			
 			if (!m.completed && m.player1 && m.player2) {
 				const scheduleInfo = getScheduledGameInfo(m.player1, m.player2);
 				const schedDiv = document.createElement('div');
@@ -1975,11 +1964,15 @@
 		const t = state.tournament;
 		if (!m || !t) return;
 
+		triggerLocalUpdatePause();
+
 		m.score1 = parseInt(document.getElementById('sc1').value) || 0;
 		m.score2 = parseInt(document.getElementById('sc2').value) || 0;
 		m.completed = true;
 		m.winner = m.score1 > m.score2 ? m.player1 : m.player2;
 		m.loser = m.score1 > m.score2 ? m.player2 : m.player1;
+
+		document.getElementById('matchModal').classList.remove('active');
 
 		try {
 			if (m.type === 'winner' || m.type === 'winner_3rd' || m.type === 'loser' || m.type === 'loser_3rd') {
@@ -2079,10 +2072,9 @@
 				}
 				
 				await addSystemNews(`🎊 TURNIER BEENDET 🎊`, newsContent, false);
-
 				updateUI();
-				await saveToCloud();
-				await archiveTournament();
+				saveToCloud();
+				archiveTournament();
 				return;
 			}
 
@@ -2092,25 +2084,24 @@
 					g.title.startsWith(`${m.player2} vs. ${m.player1}`)
 				);
 				if (plannedMatch) {
-					const { doc, deleteDoc } = dbFunctions;
-					await deleteDoc(doc(db, CONFIG.GAMES_COL, plannedMatch.id)).catch(err => console.error("Auto-delete failed:", err));
+					const { doc, deleteDoc } = window.dbFunctions;
+					deleteDoc(doc(window.db, CONFIG.GAMES_COL, plannedMatch.id)).catch(err => console.error("Auto-delete failed:", err));
 				}
 			}
 
 			updateUI();
-			await saveToCloud();
-		} finally {
-			document.getElementById('matchModal').classList.remove('active');
+			saveToCloud();
+		} catch (err) {
+			console.error("Fehler bei handleResult:", err);
 		}
 	}
 
 	async function saveToCloud() {
-		if (!state.tournament || !dbFunctions) return;
-		const { doc, setDoc } = dbFunctions;
+		if (!state.tournament || !window.dbFunctions) return;
+		const { doc, setDoc } = window.dbFunctions;
 		const winnerObj = {}; state.tournament.winnerBracket.forEach((r, i) => winnerObj[`round_${i}`] = r);
 		const loserObj = {}; state.tournament.loserBracket.forEach((r, i) => loserObj[`round_${i}`] = r);
-		
-		const tournamentData = {
+		await setDoc(doc(window.db, CONFIG.DB_COL, CONFIG.DB_DOC), {
 			name: state.tournament.name, players: state.tournament.players,
 			stepladder: state.tournament.stepladder, winnerBracket: winnerObj,
 			loserBracket: loserObj, tournamentOver: state.tournament.tournamentOver,
@@ -2119,18 +2110,14 @@
 			groups: state.tournament.groups || [],
 			wbToLbMap: state.tournament.wbToLbMap || {},
 			matchIdCounter: state.tournament.matchIdCounter || 0
-		};
-
-		lastTournamentHash = JSON.stringify(tournamentData);
-
-		await setDoc(doc(db, CONFIG.DB_COL, CONFIG.DB_DOC), tournamentData);
+		});
 	}
 
 	async function saveAssetsToCloud() {
-		if (!dbFunctions) return;
+		if (!window.dbFunctions) return;
 		if (!requireAdmin()) return;
-		const { doc, setDoc } = dbFunctions;
-		await setDoc(doc(db, CONFIG.DB_COL, CONFIG.ASSETS_DOC), state.globalAssets || {});
+		const { doc, setDoc } = window.dbFunctions;
+		await setDoc(doc(window.db, CONFIG.DB_COL, CONFIG.ASSETS_DOC), state.globalAssets || {});
 	}
 
 	/**
@@ -2140,10 +2127,10 @@
 	 */
 
 	async function archiveTournament() {
-		if (!state.tournament || !dbFunctions) return;
+		if (!state.tournament || !window.dbFunctions) return;
 		if (!requireAdmin()) return;
 
-		const { doc, setDoc } = dbFunctions;
+		const { doc, setDoc } = window.dbFunctions;
 		const archiveId = `tournament_${Date.now()}`;
 
 		const winnerObj = {};
@@ -2167,7 +2154,7 @@
 			archivedAt: Date.now()
 		};
 
-		await setDoc(doc(db, CONFIG.ARCHIVES_COL, archiveId), archiveData);
+		await setDoc(doc(window.db, CONFIG.ARCHIVES_COL, archiveId), archiveData);
 		showToast("Turnier archiviert!", "success");
 	}
 
@@ -2179,8 +2166,8 @@
 			confirmText: "Endgültig Löschen",
 			onConfirm: async () => {
 				try {
-					const { doc, deleteDoc } = dbFunctions;
-					await deleteDoc(doc(db, CONFIG.ARCHIVES_COL, archiveId));
+					const { doc, deleteDoc } = window.dbFunctions;
+					await deleteDoc(doc(window.db, CONFIG.ARCHIVES_COL, archiveId));
 					showToast("Archiv gelöscht.", "success");
 					loadTournamentArchives();
 				} catch (e) {
@@ -2196,8 +2183,8 @@
 		list.innerHTML = '<p style="text-align:center; padding:20px;">Lade Archive...</p>';
 
 		try {
-			const { collection, getDocs } = dbFunctions;
-			const snap = await getDocs(collection(db, CONFIG.ARCHIVES_COL));
+			const { collection, getDocs } = window.dbFunctions;
+			const snap = await getDocs(collection(window.db, CONFIG.ARCHIVES_COL));
 
 			if (snap.empty) {
 				list.innerHTML = '<p style="text-align:center; padding:20px; color:var(--text-dim);">Keine archivierten Turniere gefunden.</p>';
@@ -2220,7 +2207,6 @@
 				});
 
 				const archiveObj = TournamentManager.fromJSON(archiveData);
-
 				const podium = calculatePodium(archiveObj);
 				let podiumHtml = '';
 				if (podium.isGroup) {
@@ -2486,7 +2472,9 @@
 			rounds.push({ col, matches: matchElements });
 		});
 
-		setTimeout(() => drawConnectors(svg, rounds, gradientId), 100);
+		if (container.offsetParent !== null) {
+			setTimeout(() => drawConnectors(svg, rounds, gradientId), 100);
+		}
 	}
 
 	function renderArchivedStepladder(tournament, container) {
@@ -2506,10 +2494,12 @@
 
 	/**
 	 * ============================================================
-	 * 11. EVENT-LISTENER (WENN DIE SEITE LÄDT)
+	 * 11. EVENT-LISTENER & LAUFMETHODEN
 	 * ============================================================
 	 */
 
+	// Die Fehlerquelle wurde hier entfernt. Keine automatischen startSync() Calls mehr auf visibilitychange!
+	
 	document.addEventListener('DOMContentLoaded', () => {
 		loadSettings();
 
@@ -2553,28 +2543,24 @@
 			}
 		};
 
+		// Das Setup greift jetzt nur einmalig hier
 		const startSync = () => {
-			if (dbFunctions) {
-				dbFunctions.onSnapshot(dbFunctions.doc(db, CONFIG.DB_COL, CONFIG.DB_DOC), s => {
-					if (s.exists()) {
-						const newData = s.data();
-						const newHash = JSON.stringify(newData);
-						if (newHash !== lastTournamentHash) {
-							lastTournamentHash = newHash;
-							state.tournament = (newData && Object.keys(newData).length > 0) ? TournamentManager.fromJSON(newData) : null;
-							updateUI();
-						}
-					} else if (lastTournamentHash !== null) {
-						lastTournamentHash = null;
-						state.tournament = null;
+			if (window.dbFunctions) {
+				window.dbFunctions.onSnapshot(window.dbFunctions.doc(window.db, CONFIG.DB_COL, CONFIG.DB_DOC), s => {
+					if (!isLocalUpdatePending) {
+						state.tournament = s.exists() ? TournamentManager.fromJSON(s.data()) : null; 
 						updateUI();
 					}
 				});
-				dbFunctions.onSnapshot(dbFunctions.doc(db, CONFIG.DB_COL, CONFIG.ASSETS_DOC), s => {
-					state.globalAssets = s.exists() ? s.data() : {};
+				window.dbFunctions.onSnapshot(window.dbFunctions.doc(window.db, CONFIG.DB_COL, CONFIG.ASSETS_DOC), s => {
+					if (!isLocalUpdatePending) {
+						state.globalAssets = s.exists() ? s.data() : {}; 
+						updateUI();
+					}
 				});
 			} else setTimeout(startSync, 100);
 		};
+
 		startSync();
 
 		document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -2611,7 +2597,7 @@
 
 			try {
 				const hashedPassword = await hashPassword(p);
-				await dbFunctions.setDoc(dbFunctions.doc(db, CONFIG.USERS_COL, u), { password: hashedPassword, isAdmin: isAdminUser });
+				await window.dbFunctions.setDoc(window.dbFunctions.doc(window.db, CONFIG.USERS_COL, u), { password: hashedPassword, isAdmin: isAdminUser });
 				showToast(`Benutzer angelegt! ${isAdminUser ? '(Admin)' : '(Zuschauer)'}`, "success");
 				document.getElementById('newUserName').value = '';
 				document.getElementById('newUserPass').value = '';
@@ -2646,7 +2632,6 @@
 			});
 		};
 
-		// Turnier löschen - JETZT MIT SOFORTIGEM LOKALEM UPDATE
 		document.getElementById('deleteTournamentBtn').onclick = async () => {
 			verifyAdminAction(() => {
 				showCustomDialog({
@@ -2654,10 +2639,10 @@
 					message: "Diese Aktion kann nicht rückgängig gemacht werden!",
 					confirmText: "Endgültig Löschen",
 					onConfirm: async () => {
+						triggerLocalUpdatePause();
+						await window.dbFunctions.setDoc(window.dbFunctions.doc(window.db, CONFIG.DB_COL, CONFIG.DB_DOC), {});
 						state.tournament = null;
-						lastTournamentHash = JSON.stringify({});
 						updateUI();
-						await dbFunctions.setDoc(dbFunctions.doc(db, CONFIG.DB_COL, CONFIG.DB_DOC), {});
 						showToast("Turnier gelöscht", "danger");
 					}
 				});
@@ -2680,13 +2665,13 @@
 			playerNum.style.minWidth = '30px';
 			playerNum.style.opacity = '0.6';
 			playerNum.textContent = `${count + 1}.`;
-
+			
 			const inp = document.createElement('input');
 			inp.className = 'form-input player-in';
 			inp.placeholder = 'Name';
 			inp.style.flex = '1';
 			inp.style.margin = '0';
-
+			
 			const delBtn = document.createElement('button');
 			delBtn.type = 'button';
 			delBtn.className = 'btn btn-danger';
@@ -2743,6 +2728,8 @@
 			e.preventDefault();
 			if (!requireAdmin()) return;
 
+			triggerLocalUpdatePause();
+
 			let p = Array.from(document.querySelectorAll('.player-in')).map(i => i.value.trim() || 'FREILOS');
 			const hasGroups = document.getElementById('hasGroupsToggle')?.checked || false;
 
@@ -2752,11 +2739,9 @@
 				document.getElementById('shuffleToggle').checked,
 				hasGroups
 			);
-
 			updateUI();
-			document.getElementById('setupSection').classList.remove('active');
-
 			await saveToCloud();
+			document.getElementById('setupSection').classList.remove('active');
 		};
 
 		document.getElementById('archiveBtn').onclick = () => {
@@ -2786,7 +2771,7 @@
 
 	/**
 	 * ============================================================
-	 * 11. FEEDBACK & UMFRAGEN SYSTEM
+	 * 12. FEEDBACK & UMFRAGEN SYSTEM
 	 * ============================================================
 	 */
 
@@ -2837,8 +2822,8 @@
 		list.innerHTML = '<p style="text-align: center; color: var(--text-dim); padding: 20px;">Lade Formulare...</p>';
 
 		try {
-			const { collection, getDocs } = dbFunctions;
-			const snap = await getDocs(collection(db, CONFIG.FORMS_COL));
+			const { collection, getDocs } = window.dbFunctions;
+			const snap = await getDocs(collection(window.db, CONFIG.FORMS_COL));
 
 			state.activeForms = [];
 			snap.forEach(doc => {
@@ -2849,7 +2834,6 @@
 			});
 
 			state.activeForms.sort((a, b) => b.createdAt - a.createdAt);
-
 			renderFormList();
 		} catch (e) {
 			console.error(e);
@@ -3098,7 +3082,7 @@
 		}
 
 		try {
-			const { doc, setDoc } = dbFunctions;
+			const { doc, setDoc } = window.dbFunctions;
 			const responseId = 'resp_' + Date.now();
 			const responseData = {
 				formId: state.currentForm.id,
@@ -3108,7 +3092,7 @@
 				submittedAt: Date.now()
 			};
 
-			await setDoc(doc(db, CONFIG.RESPONSES_COL, responseId), responseData);
+			await setDoc(doc(window.db, CONFIG.RESPONSES_COL, responseId), responseData);
 
 			showToast("Vielen Dank für dein Feedback!", "success");
 			document.getElementById('feedbackFormModal').classList.remove('active');
@@ -3184,66 +3168,6 @@
 		div.scrollIntoView({ behavior: 'smooth' });
 	}
 
-	async function saveNewForm() {
-		if (!requireAdmin()) return;
-		const title = document.getElementById('builderFormTitle').value.trim();
-		const desc = document.getElementById('builderFormDesc').value.trim();
-
-		if (!title) { showToast("Bitte einen Titel eingeben.", "danger"); return; }
-
-		const questions = [];
-		const qDivs = document.querySelectorAll('#builderQuestionsContainer > div');
-
-		qDivs.forEach(div => {
-			const type = div.dataset.type;
-			const id = div.dataset.id;
-			const label = div.querySelector('.q-label').value.trim();
-			const required = div.querySelector('.q-required').checked;
-
-			let options = [];
-			if (type === 'radio' || type === 'checkbox') {
-				const optsStr = div.querySelector('.q-options').value;
-				if (optsStr) {
-					options = optsStr.split(',').map(s => s.trim()).filter(s => s);
-				}
-			}
-
-			if (label) {
-				questions.push({ id, type, label, required, options });
-			}
-		});
-
-		if (questions.length === 0) {
-			showToast("Das Formular braucht mindestens eine Frage.", "danger");
-			return;
-		}
-
-		try {
-			const { doc, setDoc } = dbFunctions;
-			const formId = state.editingFormId ? state.editingFormId : 'form_' + Date.now();
-			const formData = {
-				id: formId,
-				title,
-				description: desc,
-				active: true,
-				createdAt: state.editingFormId ? (state.activeForms.find(f => f.id === formId)?.createdAt || Date.now()) : Date.now(),
-				createdBy: state.currentUser ? state.currentUser.username : 'Admin',
-				questions
-			};
-
-			await setDoc(doc(db, CONFIG.FORMS_COL, formId), formData, { merge: true });
-
-			showToast(state.editingFormId ? "Formular aktualisiert!" : "Formular erstellt!", "success");
-			document.getElementById('formBuilderModal').classList.remove('active');
-			state.editingFormId = null;
-			loadForms();
-			document.getElementById('feedbackListModal').classList.add('active');
-		} catch (e) {
-			console.error(e);
-			showToast("Fehler beim Speichern.", "danger");
-		}
-	}
-
 	async function deleteForm(formId) {
 		if (!requireAdmin()) return;
 		showCustomDialog({
@@ -3252,8 +3176,8 @@
 			confirmText: "Löschen",
 			onConfirm: async () => {
 				try {
-					const { doc, deleteDoc } = dbFunctions;
-					await deleteDoc(doc(db, CONFIG.FORMS_COL, formId));
+					const { doc, deleteDoc } = window.dbFunctions;
+					await deleteDoc(doc(window.db, CONFIG.FORMS_COL, formId));
 					showToast("Formular gelöscht.", "success");
 					loadForms();
 				} catch (e) {
@@ -3267,8 +3191,8 @@
 	async function toggleFormStatus(formId, isActive) {
 		if (!requireAdmin()) return;
 		try {
-			const { doc, updateDoc } = dbFunctions;
-			await updateDoc(doc(db, CONFIG.FORMS_COL, formId), {
+			const { doc, updateDoc } = window.dbFunctions;
+			await updateDoc(doc(window.db, CONFIG.FORMS_COL, formId), {
 				active: !isActive
 			});
 			loadForms();
@@ -3319,8 +3243,8 @@
 		document.getElementById('responseViewerModal').classList.add('active');
 
 		try {
-			const { collection, getDocs, query, where } = dbFunctions;
-			const q = query(collection(db, CONFIG.RESPONSES_COL), where("formId", "==", formId));
+			const { collection, getDocs, query, where } = window.dbFunctions;
+			const q = query(collection(window.db, CONFIG.RESPONSES_COL), where("formId", "==", formId));
 			const snap = await getDocs(q);
 
 			if (snap.empty) {
@@ -3493,7 +3417,7 @@
 
 	/**
 	 * ============================================================
-	 * 12. TURNIERANMELDUNG SYSTEM
+	 * 13. TURNIERANMELDUNG SYSTEM
 	 * ============================================================
 	 */
 
@@ -3518,11 +3442,11 @@
 	}
 
 	async function openRegistrationModal() {
-		if (!dbFunctions) {
+		if (!window.dbFunctions) {
 			showToast("Lade Datenbank... Bitte einen Moment Geduld.", "warning");
 			let checkCount = 0;
 			const waitForDb = async () => {
-				if (dbFunctions) {
+				if (window.dbFunctions) {
 					await openRegistrationModal();
 				} else if (checkCount < 20) {
 					checkCount++;
@@ -3542,17 +3466,17 @@
 			return;
 		}
 
-		const { doc, getDoc, getDocs, collection } = dbFunctions;
+		const { doc, getDoc, getDocs, collection } = window.dbFunctions;
 		try {
 			document.getElementById('regOpenContent').classList.add('hidden');
 			document.getElementById('regClosedContent').classList.add('hidden');
 			document.getElementById('regModalTitle').textContent = "Lade Status...";
 			document.getElementById('registrationModal').classList.add('active');
 
-			const settingsSnap = await getDoc(doc(db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
+			const settingsSnap = await getDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
 			const settings = settingsSnap.exists() ? settingsSnap.data() : { active: false };
 
-			const regsSnap = await getDocs(collection(db, CONFIG.REGISTRATIONS_COL));
+			const regsSnap = await getDocs(collection(window.db, CONFIG.REGISTRATIONS_COL));
 			const currentCount = regsSnap.docs.filter(d => d.id !== CONFIG.REG_SETTINGS_DOC).length;
 
 			const now = Date.now();
@@ -3620,8 +3544,8 @@
 		}
 
 		try {
-			const { doc, setDoc, getDoc, getDocs, collection } = dbFunctions;
-			const settingsSnap = await getDoc(doc(db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
+			const { doc, setDoc, getDoc, getDocs, collection } = window.dbFunctions;
+			const settingsSnap = await getDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
 			const settings = settingsSnap.exists() ? settingsSnap.data() : { active: false };
 
 			if (!settings.active) {
@@ -3629,7 +3553,7 @@
 				return;
 			}
 
-			const regsSnap = await getDocs(collection(db, CONFIG.REGISTRATIONS_COL));
+			const regsSnap = await getDocs(collection(window.db, CONFIG.REGISTRATIONS_COL));
 			const currentCount = regsSnap.docs.filter(d => d.id !== CONFIG.REG_SETTINGS_DOC).length;
 
 			if (currentCount >= (settings.maxParticipants || Infinity)) {
@@ -3638,7 +3562,7 @@
 			}
 
 			const regId = 'reg_' + Date.now();
-			await setDoc(doc(db, CONFIG.REGISTRATIONS_COL, regId), {
+			await setDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, regId), {
 				nickname: encryptName(nickname),
 				registeredAt: Date.now()
 			});
@@ -3654,16 +3578,16 @@
 
 	async function loadRegistrationSettings() {
 		if (!requireAdmin()) return;
-		const { doc, getDoc, getDocs, collection } = dbFunctions;
+		const { doc, getDoc, getDocs, collection } = window.dbFunctions;
 		try {
-			const settingsSnap = await getDoc(doc(db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
+			const settingsSnap = await getDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC));
 			const settings = settingsSnap.exists() ? settingsSnap.data() : { active: false, maxParticipants: 32 };
 
 			document.getElementById('regActiveToggle').checked = settings.active;
 			document.getElementById('regDeadlineInput').value = settings.deadline || "";
 			document.getElementById('regMaxParticipants').value = settings.maxParticipants || 32;
 
-			const regsSnap = await getDocs(collection(db, CONFIG.REGISTRATIONS_COL));
+			const regsSnap = await getDocs(collection(window.db, CONFIG.REGISTRATIONS_COL));
 			const count = regsSnap.docs.filter(d => d.id !== CONFIG.REG_SETTINGS_DOC).length;
 
 			document.getElementById('regCurrentCount').textContent = count;
@@ -3681,8 +3605,8 @@
 		const maxParticipants = parseInt(document.getElementById('regMaxParticipants').value) || 32;
 
 		try {
-			const { doc, setDoc } = dbFunctions;
-			await setDoc(doc(db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC), {
+			const { doc, setDoc } = window.dbFunctions;
+			await setDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, CONFIG.REG_SETTINGS_DOC), {
 				active,
 				deadline,
 				maxParticipants
@@ -3701,8 +3625,8 @@
 		list.innerHTML = '<p style="text-align:center; padding:10px;">Lade Liste...</p>';
 
 		try {
-			const { collection, getDocs, deleteDoc, doc } = dbFunctions;
-			const snap = await getDocs(collection(db, CONFIG.REGISTRATIONS_COL));
+			const { collection, getDocs, deleteDoc, doc } = window.dbFunctions;
+			const snap = await getDocs(collection(window.db, CONFIG.REGISTRATIONS_COL));
 
 			const regs = snap.docs
 				.filter(d => d.id !== CONFIG.REG_SETTINGS_DOC)
@@ -3734,7 +3658,7 @@
 						message: `Möchtest du die Anmeldung von ${displayName} wirklich entfernen?`,
 						confirmText: "Löschen",
 						onConfirm: async () => {
-							await deleteDoc(doc(db, CONFIG.REGISTRATIONS_COL, reg.id));
+							await deleteDoc(doc(window.db, CONFIG.REGISTRATIONS_COL, reg.id));
 							showToast("Anmeldung entfernt", "success");
 							viewRegistrationList();
 							loadRegistrationSettings();
@@ -3754,7 +3678,7 @@
 
 	/**
 	 * ============================================================
-	 * 13. SPIELPLANUNG
+	 * 14. SPIELPLANUNG
 	 * ============================================================
 	 */
 
@@ -3799,17 +3723,17 @@
 			dateInput.min = new Date().toISOString().split('T')[0];
 		}
 
-		if (dbFunctions) {
-			const { collection, onSnapshot, query } = dbFunctions;
-			onSnapshot(collection(db, CONFIG.GAMES_COL), (snapshot) => {
+		if (window.dbFunctions) {
+			const { collection, onSnapshot } = window.dbFunctions;
+			onSnapshot(collection(window.db, CONFIG.GAMES_COL), (snapshot) => {
 				state.plannedGames = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
 				const today = new Date().toISOString().split('T')[0];
-				const { doc, deleteDoc } = dbFunctions;
+				const { doc, deleteDoc } = window.dbFunctions;
 				state.plannedGames.forEach(async (game) => {
 					if (game.date < today) {
 						console.log("Cleanup: Lösche veraltetes Spiel:", game.title, game.date);
-						await deleteDoc(doc(db, CONFIG.GAMES_COL, game.id)).catch(e => console.error(e));
+						await deleteDoc(doc(window.db, CONFIG.GAMES_COL, game.id)).catch(e => console.error(e));
 					}
 				});
 
@@ -3874,7 +3798,6 @@
 		}
 
 		const uniqueMatches = [...new Set(matches)].sort();
-
 		const filteredMatches = uniqueMatches.filter(m => m.toLowerCase().includes(filterText.toLowerCase()));
 
 		if (filteredMatches.length === 0) {
@@ -4142,22 +4065,29 @@
 
 		isSavingGame = true;
 		try {
-			const { doc, setDoc } = dbFunctions;
+			const { doc, setDoc } = window.dbFunctions;
 			const id = 'game_' + Date.now();
-			await setDoc(doc(db, CONFIG.GAMES_COL, id), {
+			const newGameData = {
 				date,
 				time,
 				duration,
 				title,
 				createdBy: state.currentUser.username,
 				createdAt: Date.now()
-			});
+			};
 
+			state.plannedGames.push({ id, ...newGameData });
 			showToast("Spiel erfolgreich geplant!", "success");
 			document.getElementById('addGameModal').classList.remove('active');
 			state.selectedDate = date;
 			renderCalendar();
 			showGamesForDate(date);
+
+			setDoc(doc(window.db, CONFIG.GAMES_COL, id), newGameData).catch(err => {
+				console.error(err);
+				showToast("Fehler beim Speichern auf dem Server.", "danger");
+			});
+
 		} catch (e) {
 			console.error(e);
 			showToast("Fehler beim Speichern.", "danger");
@@ -4174,8 +4104,8 @@
 			confirmText: "Löschen",
 			onConfirm: async () => {
 				try {
-					const { doc, deleteDoc } = dbFunctions;
-					await deleteDoc(doc(db, CONFIG.GAMES_COL, id));
+					const { doc, deleteDoc } = window.dbFunctions;
+					await deleteDoc(doc(window.db, CONFIG.GAMES_COL, id));
 					showToast("Spiel gelöscht.", "success");
 				} catch (e) {
 					console.error(e);

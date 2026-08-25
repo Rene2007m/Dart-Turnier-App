@@ -50,9 +50,23 @@ exports.handler = async (event, context) => {
         const isSensitiveRead = (path && path.startsWith('users') && (action === 'getDocs' || action === 'getDoc')); // Blockiert das Auflisten aller User ohne Adminrechte
 
         // ============================================================
+        // NEU: AUSNAHMEN FÜR ÖFFENTLICHEN SCHREIBZUGRIFF
+        // ============================================================
+        // Diese Pfade dürfen von normalen Nutzern ohne Login beschrieben werden
+        const publicWritePaths = ['registrations', 'responses', 'planned_games'];
+        const isPublicWrite = publicWritePaths.some(publicPath => path && path.startsWith(publicPath));
+        
+        // Authentifizierung wird benötigt, wenn es sich um einen sensiblen Lesezugriff handelt,
+        // ODER wenn es ein Schreibzugriff ist, der NICHT in der Ausnahmen-Liste steht.
+        let requiresAuth = isSensitiveRead;
+        if (isWriteAction && !isPublicWrite) {
+            requiresAuth = true;
+        }
+
+        // ============================================================
         // SICHERHEITSPRÜFUNG (ADMIN AUTHENTIFIZIERUNG)
         // ============================================================
-        if (isWriteAction || isSensitiveRead) {
+        if (requiresAuth) {
             const authHeader = event.headers.authorization || event.headers.Authorization;
 
             if (!authHeader) {
