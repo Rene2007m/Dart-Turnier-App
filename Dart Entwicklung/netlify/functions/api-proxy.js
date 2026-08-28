@@ -21,9 +21,9 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 exports.handler = async (event, context) => {
-    // CORS Header für Anfragen
+    // CORS Header für Anfragen (Ersetze '*' bei Bedarf durch deine genaue Netlify-Domain)
     const headers = {
-        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Origin': 'https://aucotec.netlify.app/',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         'Content-Type': 'application/json'
@@ -47,17 +47,11 @@ exports.handler = async (event, context) => {
         }
 
         const isWriteAction = ['setDoc', 'updateDoc', 'deleteDoc'].includes(action);
-        const isSensitiveRead = (path && path.startsWith('users') && (action === 'getDocs' || action === 'getDoc')); // Blockiert das Auflisten aller User ohne Adminrechte
+        const isSensitiveRead = (path && path.startsWith('users') && (action === 'getDocs' || action === 'getDoc'));
 
-        // ============================================================
-        // NEU: AUSNAHMEN FÜR ÖFFENTLICHEN SCHREIBZUGRIFF
-        // ============================================================
-        // Diese Pfade dürfen von normalen Nutzern ohne Login beschrieben werden
         const publicWritePaths = ['registrations', 'responses', 'planned_games'];
-        const isPublicWrite = publicWritePaths.some(publicPath => path && path.startsWith(publicPath));
+        const isPublicWrite = (action === 'setDoc') && publicWritePaths.some(publicPath => path && path.startsWith(publicPath));
         
-        // Authentifizierung wird benötigt, wenn es sich um einen sensiblen Lesezugriff handelt,
-        // ODER wenn es ein Schreibzugriff ist, der NICHT in der Ausnahmen-Liste steht.
         let requiresAuth = isSensitiveRead;
         if (isWriteAction && !isPublicWrite) {
             requiresAuth = true;
@@ -127,7 +121,6 @@ exports.handler = async (event, context) => {
             }
 
             case 'getDoc': {
-                // Hier wird gezielt ein Dokument aufgerufen
                 const snap = await db.doc(path).get();
                 return {
                     statusCode: 200,
@@ -141,7 +134,6 @@ exports.handler = async (event, context) => {
             }
 
             case 'getDocs': {
-                // Hier wird gezielt eine Collection aufgerufen
                 let queryRef = db.collection(path);
                 const conditionsParam = event.queryStringParameters.conditions;
 

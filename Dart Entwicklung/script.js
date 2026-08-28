@@ -64,10 +64,34 @@
 			const isDoc = ref.path.includes('/');
 			const fetchFn = isDoc ? window.dbFunctions.getDoc : window.dbFunctions.getDocs;
 			
+			let hasFetchedOnce = false;
+
 			const executeFetch = () => {
-				if (!isLocalUpdatePending) {
-					fetchFn(ref).then(callback);
+				if (isLocalUpdatePending) return;
+
+				// OPTIMIERUNG 1: Tab nicht sichtbar -> Abbruch
+				if (document.visibilityState !== 'visible' && hasFetchedOnce) {
+					return;
 				}
+
+				// OPTIMIERUNG 2: Ohne Anmeldung -> GAR NICHTS LADEN (außer man klickt explizit auf Registrierung)
+				if (!state.currentUser) {
+					return;
+				}
+
+				// OPTIMIERUNG 3: Im Home-Bereich nur einmalig laden (News)
+				const activeTabBtn = document.querySelector('.tab-btn.active');
+				const activeTab = activeTabBtn ? activeTabBtn.dataset.tab : 'homeSection';
+				
+				if (activeTab === 'homeSection' && hasFetchedOnce) {
+					return; 
+				}
+
+				// In allen anderen Tabs (Bracket, Gruppen, Spielplanung) wird geladen
+				fetchFn(ref).then(data => {
+					hasFetchedOnce = true;
+					callback(data);
+				});
 			};
 
 			// Erstes Ausführen direkt beim Aufruf
@@ -88,6 +112,10 @@
 				if (document.visibilityState === 'visible' && !isLocalUpdatePending) {
 					executeFetch();
 				}
+			});
+
+			window.addEventListener('force-sync-update', () => {
+				executeFetch();
 			});
 		}
 	};
@@ -1404,7 +1432,6 @@
 		body.classList.toggle('no-connectors', !appSettings.connectors);
 		body.classList.toggle('show-tile-labels', appSettings.showTileLabels);
 
-		// Event feuern, damit Intervalle sich an die neuen Einstellungen anpassen
 		window.dispatchEvent(new Event('sync-settings-changed'));
 	}
 
@@ -2497,8 +2524,6 @@
 	 * 11. EVENT-LISTENER & LAUFMETHODEN
 	 * ============================================================
 	 */
-
-	// Die Fehlerquelle wurde hier entfernt. Keine automatischen startSync() Calls mehr auf visibilitychange!
 	
 	document.addEventListener('DOMContentLoaded', () => {
 		loadSettings();
@@ -2536,6 +2561,7 @@
 			e.preventDefault();
 			const success = await authenticate(document.getElementById('authUsername').value, document.getElementById('authPassword').value);
 			if (success) {
+				window.dispatchEvent(new Event('force-sync-update'));
 				updateUI();
 				showToast("Erfolgreich eingeloggt", "success");
 			} else {
@@ -2543,7 +2569,6 @@
 			}
 		};
 
-		// Das Setup greift jetzt nur einmalig hier
 		const startSync = () => {
 			if (window.dbFunctions) {
 				window.dbFunctions.onSnapshot(window.dbFunctions.doc(window.db, CONFIG.DB_COL, CONFIG.DB_DOC), s => {
@@ -2576,6 +2601,7 @@
 				if (state.tournament && btn.dataset.tab === 'groupsSection') {
 					renderGroups();
 				}
+				window.dispatchEvent(new Event('force-sync-update'));
 			};
 		});
 
@@ -3708,6 +3734,14 @@
 
 		const inputs = ['gameDateInput', 'gameTimeInput', 'gameDurationInput'];
 		inputs.forEach(id => {
+			document.getElementById(id).addEventListener('change', async () => {
+				const { collection, getDocs } = window.dbFunctions;
+				try {
+					const snap = await getDocs(collection(window.db, CONFIG.GAMES_COL));
+					state.plannedGames = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+					validateGameForm();
+				} catch (e) { console.error("Fehler beim Live-Check", e); }
+			});
 			document.getElementById(id).addEventListener('input', validateGameForm);
 		});
 
@@ -3862,8 +3896,30 @@
 		}
 	}
 
-	function openGamePlanningModal() {
+	async function openGamePlanningModal() {
+		// 1. Modal öffnen und visuelles Feedback geben
 		document.getElementById('gamePlanningModal').classList.add('active');
+		const list = document.getElementById('dailyGamesList');
+		if (list) list.innerHTML = '<p style="text-align: center; color: var(--text-dim); padding: 40px;">Lade Live-Daten...</p>';
+
+		// 2. Harter Datenbank-Fetch beim Öffnen
+		try {
+			const { collection, getDocs, doc, deleteDoc } = window.dbFunctions;
+			const snap = await getDocs(collection(window.db, CONFIG.GAMES_COL));
+			state.plannedGames = snap.docs.map(document => ({ id: document.id, ...document.data() }));
+
+			// 3. Direkt aufräumen: Spiele aus der Vergangenheit löschen
+			const today = new Date().toISOString().split('T')[0];
+			state.plannedGames.forEach(async (game) => {
+				if (game.date < today) {
+					await deleteDoc(doc(window.db, CONFIG.GAMES_COL, game.id)).catch(e => console.error(e));
+				}
+			});
+		} catch (e) {
+			console.error("Fehler beim Live-Fetch der Spielplanung:", e);
+		}
+
+		// 4. Kalender und Liste mit den frischen Daten rendern
 		renderCalendar();
 		showGamesForDate(state.selectedDate);
 	}
@@ -4050,13 +4106,21 @@
 			return;
 		}
 
+		try {
+			const { collection, getDocs } = window.dbFunctions;
+			const snap = await getDocs(collection(window.db, CONFIG.GAMES_COL));
+			state.plannedGames = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+		} catch (err) {
+			console.error("Live-Check fehlgeschlagen:", err);
+		}
+
 		const dummyGame = { id: 'temp', time, duration };
 		const dayGames = state.plannedGames.filter(g => g.date === date);
 		const hasOverlap = checkOverlapLogic(dummyGame, dayGames);
 
 		if (hasOverlap) {
-			showToast("Speichern nicht möglich: Zeitlicher Konflikt!", "danger");
-			validateGameForm();
+			showToast("Speichern nicht möglich: Zeitlicher Konflikt (Doppelbuchung)!", "danger");
+			validateGameForm(); 
 			return;
 		}
 
