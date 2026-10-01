@@ -67,7 +67,7 @@ exports.handler = async (event, context) => {
         const isSensitiveRead = (path && path.startsWith('users') && (action === 'getDocs' || action === 'getDoc'));
 
         const publicWritePaths = ['registrations', 'responses', 'planned_games'];
-        const isPublicWrite = (action === 'setDoc') && publicWritePaths.some(publicPath => path && path.startsWith(publicPath));
+        const isPublicWrite = ['setDoc', 'updateDoc', 'deleteDoc'].includes(action) && publicWritePaths.some(publicPath => path && path.startsWith(publicPath));
         
         let requiresAuth = isSensitiveRead;
         if (isWriteAction && !isPublicWrite) {

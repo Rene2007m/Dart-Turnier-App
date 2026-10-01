@@ -3767,15 +3767,33 @@
 	 * ============================================================
 	 */
 
+	let editingGameId = null;
+
 	function initGamePlanning() {
 		const gpBtn = document.getElementById('gamePlanningBtn');
 		if (gpBtn) gpBtn.onclick = openGamePlanningModal;
 
 		document.getElementById('closeGamePlanningModal').onclick = () => document.getElementById('gamePlanningModal').classList.remove('active');
 		document.getElementById('openAddGameBtn').onclick = () => {
+			if (!state.currentUser) {
+				showToast("Bitte melde dich an, um ein Spiel zu planen.", "warning");
+				return;
+			}
+			editingGameId = null;
 			document.getElementById('addGameForm').reset();
+			const modalTitle = document.getElementById('gameModalTitle');
+			if (modalTitle) {
+				modalTitle.innerHTML = '<span style="color: var(--primary);">➕</span> Spiel planen';
+			}
 			const searchInput = document.getElementById('matchPickerSearch');
-			if (searchInput) searchInput.value = '';
+			if (searchInput) {
+				searchInput.value = '';
+				searchInput.style.display = 'block';
+			}
+			const pickerContainer = document.getElementById('matchPickerContainer');
+			if (pickerContainer) {
+				pickerContainer.style.display = 'block';
+			}
 			document.getElementById('gameTitleInput').value = "";
 			const display = document.getElementById('selectedMatchDisplay');
 			if (display) {
@@ -3784,10 +3802,20 @@
 			}
 			document.getElementById('gameDateInput').value = state.selectedDate;
 			document.getElementById('overlapWarning').classList.add('hidden');
+			const saveBtn = document.querySelector('#addGameForm button[type="submit"]');
+			if (saveBtn) {
+				saveBtn.textContent = 'Speichern';
+				saveBtn.disabled = false;
+				saveBtn.style.opacity = '1';
+				saveBtn.style.cursor = 'pointer';
+			}
 			updateMatchPicker();
 			document.getElementById('addGameModal').classList.add('active');
 		};
-		document.getElementById('closeAddGameModal').onclick = () => document.getElementById('addGameModal').classList.remove('active');
+		document.getElementById('closeAddGameModal').onclick = () => {
+			editingGameId = null;
+			document.getElementById('addGameModal').classList.remove('active');
+		};
 
 		document.getElementById('addGameForm').onsubmit = savePlannedGame;
 
@@ -3932,8 +3960,8 @@
 			return;
 		}
 
-		const dummyGame = { id: 'temp', time, duration };
-		const dayGames = state.plannedGames.filter(g => g.date === date);
+		const dummyGame = { id: editingGameId || 'temp', time, duration };
+		const dayGames = state.plannedGames.filter(g => g.date === date && g.id !== editingGameId);
 		const hasOverlap = checkOverlapLogic(dummyGame, dayGames);
 
 		if (hasOverlap) {
@@ -3950,24 +3978,21 @@
 				saveBtn.disabled = false;
 				saveBtn.style.opacity = '1';
 				saveBtn.style.cursor = 'pointer';
-				saveBtn.textContent = 'Speichern';
+				saveBtn.textContent = editingGameId ? 'Verschieben' : 'Speichern';
 			}
 		}
 	}
 
 	async function openGamePlanningModal() {
-		// 1. Modal öffnen und visuelles Feedback geben
 		document.getElementById('gamePlanningModal').classList.add('active');
 		const list = document.getElementById('dailyGamesList');
 		if (list) list.innerHTML = '<p style="text-align: center; color: var(--text-dim); padding: 40px;">Lade Live-Daten...</p>';
 
-		// 2. Harter Datenbank-Fetch beim Öffnen
 		try {
 			const { collection, getDocs, doc, deleteDoc } = window.dbFunctions;
 			const snap = await getDocs(collection(window.db, CONFIG.GAMES_COL));
 			state.plannedGames = snap.docs.map(document => ({ id: document.id, ...document.data() }));
 
-			// 3. Direkt aufräumen: Spiele aus der Vergangenheit löschen
 			const today = new Date().toISOString().split('T')[0];
 			state.plannedGames.forEach(async (game) => {
 				if (game.date < today) {
@@ -3978,9 +4003,60 @@
 			console.error("Fehler beim Live-Fetch der Spielplanung:", e);
 		}
 
-		// 4. Kalender und Liste mit den frischen Daten rendern
 		renderCalendar();
 		showGamesForDate(state.selectedDate);
+	}
+
+	function openRescheduleGameModal(game) {
+		if (!state.currentUser) {
+			showToast("Bitte melde dich an, um Spiele zu verschieben.", "warning");
+			return;
+		}
+
+		editingGameId = game.id;
+
+		const modalTitle = document.getElementById('gameModalTitle');
+		if (modalTitle) {
+			modalTitle.innerHTML = '<span style="color: var(--primary);">✏️</span> Spiel verschieben';
+		}
+
+		const dateInput = document.getElementById('gameDateInput');
+		const timeInput = document.getElementById('gameTimeInput');
+		const durationInput = document.getElementById('gameDurationInput');
+		const titleInput = document.getElementById('gameTitleInput');
+		const display = document.getElementById('selectedMatchDisplay');
+		const pickerContainer = document.getElementById('matchPickerContainer');
+		const searchInput = document.getElementById('matchPickerSearch');
+
+		if (dateInput) dateInput.value = game.date || state.selectedDate;
+		if (timeInput) timeInput.value = game.time || '';
+		if (durationInput) durationInput.value = game.duration || '30';
+		if (titleInput) titleInput.value = game.title || '';
+
+		if (display) {
+			display.textContent = `Spiel: ${game.title}`;
+			display.style.display = 'block';
+		}
+		if (pickerContainer) {
+			pickerContainer.style.display = 'none';
+		}
+		if (searchInput) {
+			searchInput.style.display = 'none';
+		}
+
+		const warning = document.getElementById('overlapWarning');
+		if (warning) warning.classList.add('hidden');
+
+		const saveBtn = document.querySelector('#addGameForm button[type="submit"]');
+		if (saveBtn) {
+			saveBtn.textContent = 'Verschieben';
+			saveBtn.disabled = false;
+			saveBtn.style.opacity = '1';
+			saveBtn.style.cursor = 'pointer';
+		}
+
+		validateGameForm();
+		document.getElementById('addGameModal').classList.add('active');
 	}
 
 	function renderCalendar() {
@@ -4119,14 +4195,28 @@
             </div>
         `;
 
+			const actionsDiv = document.createElement('div');
+			actionsDiv.style.display = 'flex';
+			actionsDiv.style.gap = '8px';
+			actionsDiv.style.alignItems = 'center';
+
+			const editBtn = document.createElement('button');
+			editBtn.className = 'btn btn-outline small';
+			editBtn.innerHTML = '✏️ Verschieben';
+			editBtn.title = 'Spiel verschieben';
+			editBtn.onclick = () => openRescheduleGameModal(game);
+			actionsDiv.appendChild(editBtn);
+
 			if (state.isAdmin) {
 				const delBtn = document.createElement('button');
 				delBtn.className = 'btn btn-danger small';
 				delBtn.innerHTML = '🗑️';
+				delBtn.title = 'Spiel löschen';
 				delBtn.onclick = () => deletePlannedGame(game.id);
-				div.appendChild(delBtn);
+				actionsDiv.appendChild(delBtn);
 			}
 
+			div.appendChild(actionsDiv);
 			list.appendChild(div);
 		});
 	}
@@ -4151,6 +4241,12 @@
 
 	async function savePlannedGame(e) {
 		e.preventDefault();
+
+		if (!state.currentUser) {
+			showToast("Bitte melde dich an, um ein Spiel zu planen oder zu verschieben.", "warning");
+			return;
+		}
+
 		const date = document.getElementById('gameDateInput').value;
 		const time = document.getElementById('gameTimeInput').value;
 		const duration = document.getElementById('gameDurationInput').value;
@@ -4173,8 +4269,8 @@
 			console.error("Live-Check fehlgeschlagen:", err);
 		}
 
-		const dummyGame = { id: 'temp', time, duration };
-		const dayGames = state.plannedGames.filter(g => g.date === date);
+		const dummyGame = { id: editingGameId || 'temp', time, duration };
+		const dayGames = state.plannedGames.filter(g => g.date === date && g.id !== editingGameId);
 		const hasOverlap = checkOverlapLogic(dummyGame, dayGames);
 
 		if (hasOverlap) {
@@ -4189,18 +4285,31 @@
 		isSavingGame = true;
 		try {
 			const { doc, setDoc } = window.dbFunctions;
-			const id = 'game_' + Date.now();
+			const id = editingGameId || ('game_' + Date.now());
+			const existingGame = editingGameId ? state.plannedGames.find(g => g.id === id) : null;
+
 			const newGameData = {
 				date,
 				time,
 				duration,
 				title,
-				createdBy: state.currentUser.username,
-				createdAt: Date.now()
+				createdBy: existingGame ? (existingGame.createdBy || state.currentUser.username) : state.currentUser.username,
+				createdAt: existingGame ? (existingGame.createdAt || Date.now()) : Date.now(),
+				updatedBy: state.currentUser.username,
+				updatedAt: Date.now()
 			};
 
-			state.plannedGames.push({ id, ...newGameData });
-			showToast("Spiel erfolgreich geplant!", "success");
+			if (editingGameId) {
+				const idx = state.plannedGames.findIndex(g => g.id === id);
+				if (idx !== -1) {
+					state.plannedGames[idx] = { id, ...newGameData };
+				}
+				showToast("Spiel erfolgreich verschoben!", "success");
+			} else {
+				state.plannedGames.push({ id, ...newGameData });
+				showToast("Spiel erfolgreich geplant!", "success");
+			}
+
 			document.getElementById('addGameModal').classList.remove('active');
 			state.selectedDate = date;
 			renderCalendar();
@@ -4215,6 +4324,7 @@
 			console.error(e);
 			showToast("Fehler beim Speichern.", "danger");
 		} finally {
+			editingGameId = null;
 			setTimeout(() => { isSavingGame = false; }, 500);
 		}
 	}
