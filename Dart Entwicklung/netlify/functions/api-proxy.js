@@ -1,24 +1,33 @@
 const admin = require('firebase-admin');
 
 // Firebase Admin SDK Initialisierung über FIREBASE_ADMIN_KEY
-if (!admin.apps.length) {
-    try {
-        const serviceAccount = JSON.parse(process.env.FIREBASE_ADMIN_KEY);
-        
-        // Korrektur für Zeilenumbrüche im Private Key
-        if (serviceAccount.private_key) {
-            serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+let db = null;
+
+try {
+    if (!admin.apps.length) {
+        const serviceAccountStr = process.env.FIREBASE_ADMIN_KEY;
+        if (serviceAccountStr) {
+            const serviceAccount = JSON.parse(serviceAccountStr);
+            
+            // Korrektur für Zeilenumbrüche im Private Key
+            if (serviceAccount.private_key) {
+                serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+            }
+
+            admin.initializeApp({
+                credential: admin.credential.cert(serviceAccount)
+            });
+        } else {
+            console.warn("FIREBASE_ADMIN_KEY Umgebungsvariable fehlt.");
         }
-
-        admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount)
-        });
-    } catch (e) {
-        console.error("Fehler beim Initialisieren von Firebase Admin:", e);
     }
+    
+    if (admin.apps.length > 0) {
+        db = admin.firestore();
+    }
+} catch (e) {
+    console.error("Fehler beim Initialisieren von Firebase Admin:", e);
 }
-
-const db = admin.firestore();
 
 exports.handler = async (event, context) => {
     // CORS Header für Anfragen (Ersetze '*' bei Bedarf durch deine genaue Netlify-Domain)
@@ -32,6 +41,14 @@ exports.handler = async (event, context) => {
     // Preflight-Anfrage (OPTIONS) direkt bestätigen
     if (event.httpMethod === 'OPTIONS') {
         return { statusCode: 200, headers, body: JSON.stringify({ message: 'CORS Preflight OK' }) };
+    }
+
+    if (!db) {
+        return {
+            statusCode: 500,
+            headers,
+            body: JSON.stringify({ error: 'Datenbank-Verbindung nicht initialisiert. Überprüfe die Netlify Umgebungsvariablen (FIREBASE_ADMIN_KEY).' })
+        };
     }
 
     try {

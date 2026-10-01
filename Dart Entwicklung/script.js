@@ -21,6 +21,7 @@
 				const res = await fetch(`/.netlify/functions/api-proxy?action=getDoc&path=${encodeURIComponent(ref.path)}`, {
 					headers: getAuthHeader()
 				});
+				if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
 				const json = await res.json();
 				return { exists: () => json.exists, id: json.id, data: () => json.data };
 			} catch(e) { console.error("API-Proxy getDoc Fehler:", e); return { exists: () => false, data: () => ({}) }; }
@@ -32,10 +33,11 @@
 				const res = await fetch(url, { 
 					headers: getAuthHeader()
 				});
+				if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
 				const json = await res.json();
 				return {
 					empty: json.empty,
-					docs: json.docs.map(d => ({ id: d.id, data: () => d.data })),
+					docs: json.docs ? json.docs.map(d => ({ id: d.id, data: () => d.data })) : [],
 					forEach: function(cb) { this.docs.forEach(cb); }
 				};
 			} catch(e) { console.error("API-Proxy getDocs Fehler:", e); return { empty: true, docs: [], forEach: () => {} }; }
@@ -74,12 +76,12 @@
 					return;
 				}
 
-				// OPTIMIERUNG 2: Ohne Anmeldung -> GAR NICHTS LADEN (außer man klickt explizit auf Registrierung)
+				// OPTIMIERUNG 2: Ohne Anmeldung -> nichts laden (außer man klickt explizit auf Registrierung)
 				if (!state.currentUser) {
 					return;
 				}
 
-				// OPTIMIERUNG 3: Im Home-Bereich nur einmalig laden (News)
+				// Im Home-Bereich nur einmalig laden (News)
 				const activeTabBtn = document.querySelector('.tab-btn.active');
 				const activeTab = activeTabBtn ? activeTabBtn.dataset.tab : 'homeSection';
 				
@@ -97,11 +99,11 @@
 			// Erstes Ausführen direkt beim Aufruf
 			executeFetch();
 
-			// Kapselung des Intervalls pro Snapshot, damit sie sich nicht stören
+			// Kapselung des Intervalls pro Snapshot
 			let interval = null;
 			const updateInterval = () => {
 				if (interval) clearInterval(interval);
-				// Automatischer Timer läuft nun dauerhaft im Hintergrund (30 Sekunden)
+				// Automatischer Timer (30 Sekunden)
 				interval = setInterval(executeFetch, 30000); 
 			};
 			
@@ -1782,12 +1784,6 @@
 			}
 		});
 
-		group.members = group.members.map(m => {
-			const mName = typeof m === 'string' ? m : m.name;
-			const pts = standings[mName] ? standings[mName].Pt : 0;
-			return { name: mName, points: pts };
-		});
-
 		const tbody = document.getElementById('groupStandingsBody');
 		tbody.innerHTML = '';
 		standingArray.forEach((s, idx) => {
@@ -1978,20 +1974,78 @@
 	 * ============================================================
 	 */
 
+	function findMatchInTournament(t, matchToFind) {
+		if (!t || !matchToFind) return null;
+
+		if (t.groups && t.groups.length > 0) {
+			for (let gIdx = 0; gIdx < t.groups.length; gIdx++) {
+				const group = t.groups[gIdx];
+				if (group.matches) {
+					const found = group.matches.find(m =>
+						(matchToFind.id !== undefined && m.id === matchToFind.id) ||
+						(m.player1 === matchToFind.player1 && m.player2 === matchToFind.player2) ||
+						(m.player1 === matchToFind.player2 && m.player2 === matchToFind.player1)
+					);
+					if (found) {
+						if (found.groupIndex === undefined) found.groupIndex = gIdx;
+						return found;
+					}
+				}
+			}
+		}
+
+		if (t.winnerBracket && Array.isArray(t.winnerBracket)) {
+			for (const round of t.winnerBracket) {
+				if (Array.isArray(round)) {
+					const found = round.find(m =>
+						(matchToFind.id !== undefined && m.id === matchToFind.id) ||
+						(m.player1 && m.player2 && m.player1 === matchToFind.player1 && m.player2 === matchToFind.player2)
+					);
+					if (found) return found;
+				}
+			}
+		}
+
+		if (t.loserBracket && Array.isArray(t.loserBracket)) {
+			for (const round of t.loserBracket) {
+				if (Array.isArray(round)) {
+					const found = round.find(m =>
+						(matchToFind.id !== undefined && m.id === matchToFind.id) ||
+						(m.player1 && m.player2 && m.player1 === matchToFind.player1 && m.player2 === matchToFind.player2)
+					);
+					if (found) return found;
+				}
+			}
+		}
+
+		if (t.stepladder && Array.isArray(t.stepladder)) {
+			const found = t.stepladder.find(m =>
+				(matchToFind.id !== undefined && m.id === matchToFind.id) ||
+				(m.player1 && m.player2 && m.player1 === matchToFind.player1 && m.player2 === matchToFind.player2)
+			);
+			if (found) return found;
+		}
+
+		return matchToFind;
+	}
+
 	function openMatch(m) {
 		if (!requireAdmin()) return;
 		state.editingMatch = m;
-		document.getElementById('matchModalContent').innerHTML = `<div style="margin-bottom:15px"><label>${m.player1}</label><input type="number" id="sc1" class="form-input" value="${m.score1}"></div><div><label>${m.player2}</label><input type="number" id="sc2" class="form-input" value="${m.score2}"></div>`;
+		triggerLocalUpdatePause(60000);
+		document.getElementById('matchModalContent').innerHTML = `<div style="margin-bottom:15px"><label style="font-weight:bold; display:block; margin-bottom:5px;">${m.player1}</label><input type="number" inputmode="numeric" id="sc1" class="form-input" value="${m.score1}"></div><div><label style="font-weight:bold; display:block; margin-bottom:5px;">${m.player2}</label><input type="number" inputmode="numeric" id="sc2" class="form-input" value="${m.score2}"></div>`;
 		document.getElementById('matchModal').classList.add('active');
 	}
 
 	async function handleResult() {
 		if (!requireAdmin()) return;
-		const m = state.editingMatch;
+		const rawMatch = state.editingMatch;
 		const t = state.tournament;
-		if (!m || !t) return;
+		if (!rawMatch || !t) return;
 
-		triggerLocalUpdatePause();
+		triggerLocalUpdatePause(15000);
+
+		const m = findMatchInTournament(t, rawMatch) || rawMatch;
 
 		m.score1 = parseInt(document.getElementById('sc1').value) || 0;
 		m.score2 = parseInt(document.getElementById('sc2').value) || 0;
@@ -2100,7 +2154,7 @@
 				
 				await addSystemNews(`🎊 TURNIER BEENDET 🎊`, newsContent, false);
 				updateUI();
-				saveToCloud();
+				await saveToCloud();
 				archiveTournament();
 				return;
 			}
@@ -2117,9 +2171,11 @@
 			}
 
 			updateUI();
-			saveToCloud();
+			await saveToCloud();
 		} catch (err) {
 			console.error("Fehler bei handleResult:", err);
+		} finally {
+			setTimeout(() => { isLocalUpdatePending = false; }, 1500);
 		}
 	}
 
@@ -2643,7 +2699,10 @@
 			document.getElementById('groupDetailsModal').classList.remove('active');
 		};
 		document.getElementById('saveMatchBtn').onclick = handleResult;
-		document.getElementById('closeModal').onclick = () => document.getElementById('matchModal').classList.remove('active');
+		document.getElementById('closeModal').onclick = () => {
+			isLocalUpdatePending = false;
+			document.getElementById('matchModal').classList.remove('active');
+		};
 
 		document.getElementById('adminLogoutBtn').onclick = () => {
 			showCustomDialog({
